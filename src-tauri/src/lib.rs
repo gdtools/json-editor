@@ -35,7 +35,7 @@ fn allow_file(app: tauri::AppHandle, path: String) {
 #[tauri::command]
 fn allow_directory(app: tauri::AppHandle, path: String) {
     use tauri_plugin_fs::FsExt;
-    let _ = app.fs_scope().allow_directory(std::path::Path::new(&path), tauri_plugin_fs::ScopeDirectoryType::Recursive);
+    let _ = app.fs_scope().allow_directory(std::path::Path::new(&path), true);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

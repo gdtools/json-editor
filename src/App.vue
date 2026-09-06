@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { readTextFile } from '@tauri-apps/plugin-fs'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import JsonEditorPanel from './components/JsonEditorPanel.vue'
 import Toolbar from './components/Toolbar.vue'
+import TabBar from './components/TabBar.vue'
 import OpenUrlModal from './components/OpenUrlModal.vue'
 import type { EditorMode, ThemeMode } from './types'
 import { t } from './i18n'
@@ -15,12 +16,25 @@ import { usePersistedState } from './composables/usePersistedState'
 
 const SAMPLE_JSON = `{\n  "array": [1, 2, 3],\n  "boolean": true,\n  "color": "gold",\n  "null": null,\n  "number": 123,\n  "object": {\n    "a": "b",\n    "c": "d"\n  },\n  "string": "Hello World"\n}`
 
-const leftContent = usePersistedState('leftContent', SAMPLE_JSON)
-const rightContent = usePersistedState('rightContent', SAMPLE_JSON)
-const leftMode = usePersistedState<EditorMode>('leftMode', 'text')
+// ---------------------------------------------------------------------------
+// Tabs
+// ---------------------------------------------------------------------------
+interface EditorTab {
+  id: string
+  path: string
+  name: string
+  content: string
+  mode: EditorMode
+}
+
+const leftTabs = ref<EditorTab[]>([])
+const activeLeftTabId = ref<string | null>(null)
+
+// 右侧草稿（不关联文件）
+const rightDraft = usePersistedState('rightDraft', SAMPLE_JSON)
 const rightMode = usePersistedState<EditorMode>('rightMode', 'tree')
+
 const theme = usePersistedState<ThemeMode>('theme', 'light')
-const fileName = ref('untitled.json')
 
 const leftEditorRef = ref<InstanceType<typeof JsonEditorPanel>>()
 const rightEditorRef = ref<InstanceType<typeof JsonEditorPanel>>()
@@ -30,224 +44,223 @@ const rightSelectionType = ref<'array' | 'object' | 'none'>('none')
 
 const unlistenFns: (() => void)[] = []
 
-onMounted(() => {
-  document.documentElement.setAttribute('data-theme', theme.value)
-  setupFileAssociation()
-  setupMenuShortcuts()
-  setupDragDrop()
+// ---------------------------------------------------------------------------
+// Active tab helpers
+// ---------------------------------------------------------------------------
+const activeTab = computed(() => leftTabs.value.find(t => t.id === activeLeftTabId.value) ?? null)
+
+const leftContent = computed({
+  get: () => activeTab.value?.content ?? SAMPLE_JSON,
+  set: (v: string) => {
+    if (activeTab.value) {
+      activeTab.value.content = v
+    }
+  }
 })
 
-onBeforeUnmount(() => {
-  unlistenFns.forEach(fn => fn())
+const leftMode = computed({
+  get: () => activeTab.value?.mode ?? 'tree',
+  set: (m: EditorMode) => {
+    if (activeTab.value) {
+      activeTab.value.mode = m
+    }
+  }
 })
 
-async function setupMenuShortcuts() {
+const fileName = computed(() => activeTab.value?.name ?? 'untitled.json')
+
+// ---------------------------------------------------------------------------
+// Recent files
+// ---------------------------------------------------------------------------
+const recentFiles = ref<Array<{ name: string; path: string }>>([])
+const RECENT_KEY = 'json-editor-recent-files'
+const MAX_RECENT = 10
+
+function loadRecentFiles() {
   try {
-    const handlers: Record<string, () => void> = {
-      'menu:new': handleNew,
-      'menu:open': handleOpen,
-      'menu:open_url': handleOpenUrl,
-      'menu:save': handleSave,
-    }
-    for (const [eventName, handler] of Object.entries(handlers)) {
-      const unlisten = await listen(eventName, () => handler())
-      unlistenFns.push(unlisten)
-    }
-  } catch (e) {
-    // 非 Tauri 环境忽略
+    const raw = localStorage.getItem(RECENT_KEY)
+    if (raw) recentFiles.value = JSON.parse(raw)
+  } catch {
+    recentFiles.value = []
   }
 }
 
-async function setupDragDrop() {
+function pushRecentFile(path: string) {
+  const name = path.split(/[\\/]/).pop() || path
+  const list = recentFiles.value.filter(f => f.path !== path)
+  list.unshift({ name, path })
+  if (list.length > MAX_RECENT) list.length = MAX_RECENT
+  recentFiles.value = list
   try {
-    const unlisten = await getCurrentWebview().onDragDropEvent((event) => {
-      const payload = event.payload
-      if (payload.type === 'over') {
-        // 根据鼠标 x 坐标判断落在左侧还是右侧
-        const container = document.querySelector('.editor-split') as HTMLElement
-        if (container) {
-          const rect = container.getBoundingClientRect()
-          const isLeft = payload.position.x < rect.left + rect.width * splitRatio.value
-          dragOverLeft.value = isLeft
-          dragOverRight.value = !isLeft
-        }
-      } else if (payload.type === 'drop') {
-        dragOverLeft.value = false
-        dragOverRight.value = false
-        if (payload.paths.length > 0) {
-          const container = document.querySelector('.editor-split') as HTMLElement
-          const isLeft = container
-            ? payload.position.x < container.getBoundingClientRect().left + container.getBoundingClientRect().width * splitRatio.value
-            : true
-          loadDroppedFile(payload.paths[0], isLeft ? 'left' : 'right')
-        }
-      } else {
-        dragOverLeft.value = false
-        dragOverRight.value = false
-      }
-    })
-    unlistenFns.push(unlisten)
-  } catch (e) {
-    // 非 Tauri 环境忽略
+    localStorage.setItem(RECENT_KEY, JSON.stringify(list))
+  } catch {
+    // ignore quota errors
   }
 }
 
-async function loadDroppedFile(path: string, side: 'left' | 'right') {
+loadRecentFiles()
+
+// ---------------------------------------------------------------------------
+// Folder browser
+// ---------------------------------------------------------------------------
+const currentDir = ref('')
+const dirFiles = ref<string[]>([])
+const dirLoading = ref(false)
+
+function getFileDir(filePath: string): string {
+  const lastSep = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'))
+  if (lastSep <= 0) return ''
+  let dir = filePath.substring(0, lastSep)
+  if (/^[A-Za-z]:$/.test(dir)) {
+    dir = dir + '\\'
+  }
+  return dir
+}
+
+async function loadDirFiles(dirPath: string) {
+  if (!dirPath) return
+  currentDir.value = dirPath
+  dirLoading.value = true
   try {
-    const content = await readTextFile(path)
-    if (side === 'left') {
-      leftContent.value = content
-      fileName.value = path.split(/[\\/]/).pop() || 'untitled.json'
-      await nextTick()
-      leftEditorRef.value?.setText(content)
+    await invoke('allow_directory', { path: dirPath })
+    const { listJsonFiles } = await import('./utils/file')
+    const files = await listJsonFiles(dirPath)
+    dirFiles.value = files
+  } catch (e) {
+    console.error('Failed to load directory:', e)
+    dirFiles.value = []
+  } finally {
+    dirLoading.value = false
+  }
+}
+
+async function openDirForFile(filePath: string) {
+  const dir = getFileDir(filePath)
+  if (dir) {
+    await loadDirFiles(dir)
+  } else {
+    currentDir.value = ''
+    dirFiles.value = []
+  }
+}
+
+async function handleOpenFileFromFolder(fName: string) {
+  if (!currentDir.value) return
+  const fullPath = currentDir.value.replace(/[\\/]$/, '') + '/' + fName
+  await openFileInTab(fullPath)
+}
+
+// ---------------------------------------------------------------------------
+// Tab operations
+// ---------------------------------------------------------------------------
+function generateId(): string {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
+}
+
+async function openFileInTab(path: string, content?: string) {
+  // 检查是否已经打开
+  const existing = leftTabs.value.find(t => t.path === path)
+  if (existing) {
+    activeLeftTabId.value = existing.id
+    return
+  }
+  let text = content
+  if (text === undefined) {
+    try {
+      text = await readTextFile(path)
+    } catch (e) {
+      console.error('Failed to read file:', e)
+      alert('无法打开文件：' + path)
+      return
+    }
+  }
+  const name = path.split(/[\\/]/).pop() || 'untitled.json'
+  const tab: EditorTab = {
+    id: generateId(),
+    path,
+    name,
+    content: text,
+    mode: 'tree',
+  }
+  leftTabs.value.push(tab)
+  activeLeftTabId.value = tab.id
+  pushRecentFile(path)
+  await openDirForFile(path)
+}
+
+function closeTab(id: string) {
+  const idx = leftTabs.value.findIndex(t => t.id === id)
+  if (idx === -1) return
+  leftTabs.value.splice(idx, 1)
+  // 如果关闭的是当前激活的 tab，切换到相邻 tab
+  if (activeLeftTabId.value === id) {
+    if (leftTabs.value.length === 0) {
+      activeLeftTabId.value = null
     } else {
-      rightContent.value = content
-      await nextTick()
-      rightEditorRef.value?.setText(content)
+      const newIdx = Math.min(idx, leftTabs.value.length - 1)
+      activeLeftTabId.value = leftTabs.value[newIdx].id
     }
-  } catch (e) {
-    console.error('Failed to load dropped file:', e)
   }
 }
 
-// 处理通过文件关联 / 命令行 / macOS Opened 打开的 JSON 文件
-// Rust 侧统一传递真实文件路径字符串（Windows 反斜杠、macOS 正斜杠）。
-// 这里做一层兼容：若意外收到 file:// URL 也照常处理。
-function normalizePath(input: string): string {
-  if (input.startsWith('file://')) {
-    // file:///C:/Users/x.json -> C:/Users/x.json（去掉 file:// 后的多余斜杠）
-    let p = decodeURIComponent(input.slice('file://'.length))
-    if (/^\/[a-zA-Z]:/.test(p)) p = p.slice(1)
-    return p
-  }
-  return input
+function switchTab(id: string) {
+  activeLeftTabId.value = id
 }
 
-async function loadFileFromPath(rawPath: string) {
-  if (fileLoaded) return
-  fileLoaded = true
-  try {
-    const path = normalizePath(rawPath)
-    console.log('[file-association] loading file:', path)
-    const content = await readTextFile(path)
-    leftContent.value = content
-    fileName.value = path.split(/[\\/]/).pop() || 'untitled.json'
-    pushRecentFile(path)
-    await openDirForFile(path)
-    // 确保 editor 已初始化并同步内容
-    await nextTick()
-    leftEditorRef.value?.setText(content)
-    console.log('[file-association] file loaded successfully')
-  } catch (e) {
-    console.error('[file-association] ERROR:', e)
-    fileLoaded = false
+// ---------------------------------------------------------------------------
+// Toolbar handlers
+// ---------------------------------------------------------------------------
+async function handleNew() {
+  // 新建一个未保存的 tab（无路径）
+  const tab: EditorTab = {
+    id: generateId(),
+    path: '',
+    name: 'untitled.json',
+    content: '{}',
+    mode: 'tree',
   }
-}
-
-let fileLoaded = false
-
-async function setupFileAssociation() {
-  try {
-    // 注册 listener，处理运行中再次打开文件（macOS Opened / Windows 二次启动）
-    const unlisten = await listen<string[]>('opened', (event) => {
-      console.log('[file-association] opened event:', event.payload)
-      for (const p of event.payload ?? []) {
-        loadFileFromPath(p)
-      }
-    })
-    unlistenFns.push(unlisten)
-
-    // 等待子组件 editor 初始化完成
-    await new Promise(resolve => setTimeout(resolve, 100))
-
-    // 冷启动：Windows/Linux 命令行参数、macOS Opened 都已在 Rust 全局变量中
-    const paths = await invoke<string[]>('opened_paths')
-    console.log('[file-association] initial paths:', paths)
-    for (const p of paths) {
-      await loadFileFromPath(p)
-    }
-  } catch (e) {
-    console.log('[file-association] setup failed (expected in browser):', e)
-  }
-}
-
-const leftValidation = computed(() => validateJson(leftContent.value))
-const leftNodeCount = computed(() => countJsonNodes(leftContent.value))
-const rightValidation = computed(() => validateJson(rightContent.value))
-const rightNodeCount = computed(() => countJsonNodes(rightContent.value))
-
-// Resizable split panel
-const splitRatio = usePersistedState('splitRatio', 0.5)
-const isDragging = ref(false)
-
-function startDrag(e: MouseEvent) {
-  e.preventDefault()
-  isDragging.value = true
-  const onMove = (ev: MouseEvent) => {
-    const container = document.querySelector('.editor-split') as HTMLElement
-    if (!container) return
-    const rect = container.getBoundingClientRect()
-    const ratio = (ev.clientX - rect.left) / rect.width
-    splitRatio.value = Math.min(0.9, Math.max(0.1, ratio))
-  }
-  const onUp = () => {
-    isDragging.value = false
-    document.removeEventListener('mousemove', onMove)
-    document.removeEventListener('mouseup', onUp)
-    document.body.style.cursor = ''
-    document.body.style.userSelect = ''
-  }
-  document.addEventListener('mousemove', onMove)
-  document.addEventListener('mouseup', onUp)
-  document.body.style.cursor = 'col-resize'
-  document.body.style.userSelect = 'none'
-}
-
-function handleNew() {
-  leftContent.value = '{}'
-  fileName.value = 'untitled.json'
-  fileLoaded = false
+  leftTabs.value.push(tab)
+  activeLeftTabId.value = tab.id
 }
 
 async function handleOpen() {
-  try {
-    const result = await openJsonFile()
-    if (result) {
-      await invoke('allow_file', { path: result.path })
-      leftContent.value = result.content
-      fileName.value = result.path.split(/[\\/]/).pop() || 'untitled.json'
-      fileLoaded = false
-      pushRecentFile(result.path)
-      await openDirForFile(result.path)
-    }
-  } catch (e) {
-    console.error('Failed to open file:', e)
+  const result = await openJsonFile()
+  if (result) {
+    await invoke('allow_file', { path: result.path })
+    await openFileInTab(result.path, result.content)
   }
 }
 
 async function handleOpenRecent(path: string) {
-  try {
-    await invoke('allow_file', { path })
-    const content = await readTextFile(path)
-    leftContent.value = content
-    fileName.value = path.split(/[\\/]/).pop() || 'untitled.json'
-    fileLoaded = false
-    pushRecentFile(path)
-    await openDirForFile(path)
-  } catch (e) {
-    console.error('Failed to open recent file:', e)
-    alert('无法打开文件：' + path + '\n文件可能已被移动或删除。')
-  }
+  await invoke('allow_file', { path })
+  await openFileInTab(path)
 }
 
 async function handleSave() {
-  try {
-    const path = await saveJsonFile(leftContent.value, fileName.value)
-    if (path) {
-      fileName.value = path.split(/[\\/]/).pop() || fileName.value
-    }
-  } catch (e) {
-    console.error('Failed to save file:', e)
+  if (!activeTab.value) return
+  const tab = activeTab.value
+  const defaultName = tab.path ? tab.path.split(/[\\/]/).pop() || tab.name : tab.name
+  const defaultDir = tab.path ? getFileDir(tab.path) : undefined
+  const path = await saveJsonFile(tab.content, defaultName, defaultDir)
+  if (path) {
+    tab.path = path
+    tab.name = path.split(/[\\/]/).pop() || tab.name
+    pushRecentFile(path)
+    await openDirForFile(path)
+  }
+}
+
+async function handleSaveAs() {
+  if (!activeTab.value) return
+  const tab = activeTab.value
+  const defaultName = tab.name
+  const defaultDir = currentDir.value || (tab.path ? getFileDir(tab.path) : undefined)
+  const path = await saveJsonFile(tab.content, defaultName, defaultDir)
+  if (path) {
+    tab.path = path
+    tab.name = path.split(/[\\/]/).pop() || tab.name
+    pushRecentFile(path)
+    await openDirForFile(path)
   }
 }
 
@@ -256,8 +269,16 @@ async function handleOpenUrl() {
 }
 
 function handleUrlLoaded(content: string, name: string) {
-  leftContent.value = content
-  fileName.value = name
+  // URL 加载也作为 tab 打开（无路径）
+  const tab: EditorTab = {
+    id: generateId(),
+    path: '',
+    name,
+    content,
+    mode: 'tree',
+  }
+  leftTabs.value.push(tab)
+  activeLeftTabId.value = tab.id
 }
 
 async function handleCopy() {
@@ -315,9 +336,9 @@ function copyLeftToRight() {
   const selType = leftEditorRef.value?.getSelectedType()
   if (selType === 'array' || selType === 'object') {
     const value = leftEditorRef.value?.getSelectedValue()
-    rightContent.value = JSON.stringify(value, null, 2)
+    rightDraft.value = JSON.stringify(value, null, 2)
   } else {
-    rightContent.value = leftContent.value
+    rightDraft.value = leftContent.value
   }
 }
 
@@ -327,127 +348,191 @@ function copyRightToLeft() {
     const value = rightEditorRef.value?.getSelectedValue()
     leftContent.value = JSON.stringify(value, null, 2)
   } else {
-    leftContent.value = rightContent.value
+    leftContent.value = rightDraft.value
   }
 }
 
 function getCopyLeftTitle(): string {
-  if (leftSelectionType.value === 'array') return 'Copy Left Array → Right'
-  if (leftSelectionType.value === 'object') return 'Copy Left Object → Right'
-  return 'Copy Left → Right'
+  if (leftSelectionType.value === 'array') return t('copyLeftArrayToRight')
+  if (leftSelectionType.value === 'object') return t('copyLeftObjectToRight')
+  return t('copyLeftToRight')
 }
 
 function getCopyRightTitle(): string {
-  if (rightSelectionType.value === 'array') return 'Copy Right Array → Left'
-  if (rightSelectionType.value === 'object') return 'Copy Right Object → Left'
-  return 'Copy Right → Left'
+  if (rightSelectionType.value === 'array') return t('copyRightArrayToLeft')
+  if (rightSelectionType.value === 'object') return t('copyRightObjectToLeft')
+  return t('copyRightToLeft')
 }
 
-// 拖放文件高亮状态（由 Tauri onDragDropEvent 驱动）
+// ---------------------------------------------------------------------------
+// Drag & drop
+// ---------------------------------------------------------------------------
 const dragOverLeft = ref(false)
 const dragOverRight = ref(false)
 
-// 最近打开的文件
-const recentFiles = ref<Array<{ name: string; path: string }>>([])
-const RECENT_KEY = 'json-editor-recent-files'
-const MAX_RECENT = 10
-
-function loadRecentFiles() {
+async function setupDragDrop() {
   try {
-    const raw = localStorage.getItem(RECENT_KEY)
-    if (raw) recentFiles.value = JSON.parse(raw)
-  } catch {
-    recentFiles.value = []
-  }
-}
-
-function pushRecentFile(path: string) {
-  const name = path.split(/[\\/]/).pop() || path
-  const list = recentFiles.value.filter(f => f.path !== path)
-  list.unshift({ name, path })
-  if (list.length > MAX_RECENT) list.length = MAX_RECENT
-  recentFiles.value = list
-  try {
-    localStorage.setItem(RECENT_KEY, JSON.stringify(list))
-  } catch {
-    // ignore quota errors
-  }
-}
-
-loadRecentFiles()
-
-// 左侧文件夹浏览器
-const currentDir = ref('')
-const dirFiles = ref<string[]>([])
-const dirLoading = ref(false)
-
-function getFileDir(filePath: string): string {
-  const lastSep = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'))
-  if (lastSep <= 0) return ''
-  let dir = filePath.substring(0, lastSep)
-  // Windows: C: 不是合法目录，需要补成 C:\
-  if (/^[A-Za-z]:$/.test(dir)) {
-    dir = dir + '\\'
-  }
-  return dir
-}
-
-async function openDirForFile(filePath: string) {
-  const dir = getFileDir(filePath)
-  if (dir) {
-    await loadDirFiles(dir)
-  } else {
-    currentDir.value = ''
-    dirFiles.value = []
-  }
-}
-
-async function loadDirFiles(dirPath: string) {
-  if (!dirPath) return
-  // 总是刷新，避免缓存导致旧目录残留
-  currentDir.value = dirPath
-  dirLoading.value = true
-  try {
-    await invoke('allow_directory', { path: dirPath })
-    const { listJsonFiles } = await import('./utils/file')
-    const files = await listJsonFiles(dirPath)
-    dirFiles.value = files
+    const unlisten = await getCurrentWebview().onDragDropEvent((event) => {
+      const payload = event.payload
+      if (payload.type === 'over') {
+        const container = document.querySelector('.editor-split') as HTMLElement
+        if (container) {
+          const rect = container.getBoundingClientRect()
+          const isLeft = payload.position.x < rect.left + rect.width * splitRatio.value
+          dragOverLeft.value = isLeft
+          dragOverRight.value = !isLeft
+        }
+      } else if (payload.type === 'drop') {
+        dragOverLeft.value = false
+        dragOverRight.value = false
+        if (payload.paths.length > 0) {
+          const container = document.querySelector('.editor-split') as HTMLElement
+          const isLeft = container
+            ? payload.position.x < container.getBoundingClientRect().left + container.getBoundingClientRect().width * splitRatio.value
+            : true
+          loadDroppedFile(payload.paths[0], isLeft ? 'left' : 'right')
+        }
+      } else {
+        dragOverLeft.value = false
+        dragOverRight.value = false
+      }
+    })
+    unlistenFns.push(unlisten)
   } catch (e) {
-    console.error('Failed to load directory:', e)
-    dirFiles.value = []
-  } finally {
-    dirLoading.value = false
+    // non-Tauri env
   }
 }
 
-async function handleOpenFileFromFolder(fName: string) {
-  if (!currentDir.value) return
-  const fullPath = currentDir.value.replace(/[\\/]$/, '') + '/' + fName
+async function loadDroppedFile(path: string, side: 'left' | 'right') {
   try {
-    await invoke('allow_file', { path: fullPath })
-    const content = await readTextFile(fullPath)
-    leftContent.value = content
-    fileName.value = fName
-    pushRecentFile(fullPath)
-  } catch (e) {
-    console.error('Failed to open file from folder:', e)
-    alert('无法打开文件：' + fullPath)
-  }
-}
-
-async function handleSaveAs() {
-  try {
-    const defaultDir = currentDir.value || undefined
-    const path = await saveJsonFile(leftContent.value, fileName.value, defaultDir)
-    if (path) {
-      fileName.value = path.split(/[\\/]/).pop() || fileName.value
-      pushRecentFile(path)
-      await openDirForFile(path)
+    const content = await readTextFile(path)
+    if (side === 'left') {
+      await openFileInTab(path, content)
+    } else {
+      rightDraft.value = content
     }
   } catch (e) {
-    console.error('Failed to save as:', e)
+    console.error('Failed to load dropped file:', e)
   }
 }
+
+// ---------------------------------------------------------------------------
+// File association
+// ---------------------------------------------------------------------------
+function normalizePath(input: string): string {
+  if (input.startsWith('file://')) {
+    let p = decodeURIComponent(input.slice('file://'.length))
+    if (/^\/[a-zA-Z]:/.test(p)) p = p.slice(1)
+    return p
+  }
+  return input
+}
+
+async function loadFileFromPath(rawPath: string) {
+  if (activeTab.value?.path === rawPath) return
+  try {
+    const path = normalizePath(rawPath)
+    console.log('[file-association] loading file:', path)
+    const content = await readTextFile(path)
+    await openFileInTab(path, content)
+    console.log('[file-association] file loaded successfully')
+  } catch (e) {
+    console.error('[file-association] ERROR:', e)
+  }
+}
+
+async function setupFileAssociation() {
+  try {
+    const unlisten = await listen<string[]>('opened', (event) => {
+      console.log('[file-association] opened event:', event.payload)
+      for (const p of event.payload ?? []) {
+        loadFileFromPath(p)
+      }
+    })
+    unlistenFns.push(unlisten)
+
+    await new Promise(resolve => setTimeout(resolve, 100))
+
+    const paths = await invoke<string[]>('opened_paths')
+    console.log('[file-association] initial paths:', paths)
+    for (const p of paths) {
+      await loadFileFromPath(p)
+    }
+  } catch (e) {
+    console.log('[file-association] setup failed (expected in browser):', e)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Menu shortcuts
+// ---------------------------------------------------------------------------
+async function setupMenuShortcuts() {
+  try {
+    const handlers: Record<string, () => void> = {
+      'menu:new': handleNew,
+      'menu:open': handleOpen,
+      'menu:open_url': handleOpenUrl,
+      'menu:save': handleSave,
+    }
+    for (const [eventName, handler] of Object.entries(handlers)) {
+      const unlisten = await listen(eventName, () => handler())
+      unlistenFns.push(unlisten)
+    }
+  } catch (e) {
+    // non-Tauri env
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Resizable split panel
+// ---------------------------------------------------------------------------
+const splitRatio = usePersistedState('splitRatio', 0.5)
+const isDragging = ref(false)
+
+function startDrag(e: MouseEvent) {
+  e.preventDefault()
+  isDragging.value = true
+  const onMove = (ev: MouseEvent) => {
+    const container = document.querySelector('.editor-split') as HTMLElement
+    if (!container) return
+    const rect = container.getBoundingClientRect()
+    const ratio = (ev.clientX - rect.left) / rect.width
+    splitRatio.value = Math.min(0.9, Math.max(0.1, ratio))
+  }
+  const onUp = () => {
+    isDragging.value = false
+    document.removeEventListener('mousemove', onMove)
+    document.removeEventListener('mouseup', onUp)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+  }
+  document.addEventListener('mousemove', onMove)
+  document.addEventListener('mouseup', onUp)
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+}
+
+// ---------------------------------------------------------------------------
+// Validation
+// ---------------------------------------------------------------------------
+const leftValidation = computed(() => validateJson(leftContent.value))
+const leftNodeCount = computed(() => countJsonNodes(leftContent.value))
+const rightValidation = computed(() => validateJson(rightDraft.value))
+const rightNodeCount = computed(() => countJsonNodes(rightDraft.value))
+
+// ---------------------------------------------------------------------------
+// Lifecycle
+// ---------------------------------------------------------------------------
+onMounted(() => {
+  document.documentElement.setAttribute('data-theme', theme.value)
+  setupFileAssociation()
+  setupMenuShortcuts()
+  setupDragDrop()
+})
+
+onBeforeUnmount(() => {
+  unlistenFns.forEach(fn => fn())
+})
 </script>
 
 <template>
@@ -470,110 +555,143 @@ async function handleSaveAs() {
       @expand-all="handleExpandAll"
       @collapse-all="handleCollapseAll"
       @toggle-theme="handleToggleTheme"
-      @update:mode="(m) => { leftMode = m; rightMode = m }"
+      @update:mode="(m) => { if (activeTab) activeTab.mode = m }"
     />
     <div class="app-body">
-      <div class="folder-panel">
-        <div class="folder-header">{{ currentDir || t('folder.tempFile') }}</div>
-        <div class="folder-list">
-          <div v-if="dirLoading" class="folder-empty">{{ t('folder.loading') }}</div>
-          <div v-else-if="dirFiles.length === 0" class="folder-empty">{{ t('folder.empty') }}</div>
+      <div class="left-panel">
+        <TabBar
+          v-if="leftTabs.length > 0"
+          :tabs="leftTabs"
+          :active-id="activeLeftTabId"
+          @select="switchTab"
+          @close="closeTab"
+        />
+        <div class="editor-split" :class="{ 'no-tabs': leftTabs.length === 0 }">
           <div
-            v-for="f in dirFiles"
-            :key="f"
-            class="folder-item"
-            :class="{ active: f === fileName }"
-            @click="handleOpenFileFromFolder(f)"
+            class="editor-section"
+            :class="{ 'drag-over': dragOverLeft }"
+            :style="{ flex: `0 0 calc(${splitRatio * 100}% - ${splitRatio * 40}px)` }"
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="folder-icon">
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-            </svg>
-            <span class="folder-item-name">{{ f }}</span>
+            <!-- 无 tab 时显示最近文件欢迎页 -->
+            <div v-if="leftTabs.length === 0" class="welcome-panel">
+              <div class="welcome-title">{{ t('welcome.title') }}</div>
+              <div class="welcome-subtitle">{{ t('welcome.subtitle') }}</div>
+              <div v-if="recentFiles.length" class="recent-list">
+                <div class="recent-header">{{ t('welcome.recentFiles') }}</div>
+                <button
+                  v-for="file in recentFiles"
+                  :key="file.path"
+                  class="recent-item"
+                  @click="handleOpenRecent(file.path)"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                  </svg>
+                  <span class="recent-item-name">{{ file.name }}</span>
+                  <span class="recent-item-path">{{ file.path }}</span>
+                </button>
+              </div>
+              <div v-else class="recent-empty">{{ t('welcome.noRecent') }}</div>
+            </div>
+            <!-- 有 tab 时显示编辑器 + 文件夹 -->
+            <template v-else>
+              <div class="panel-header">
+                <span class="panel-title">{{ fileName }}</span>
+                <div class="panel-status">
+                  <span v-if="leftValidation.valid" class="status-ok">✓ {{ t('panel.valid') }}</span>
+                  <span v-else class="status-err">✗ {{ t('panel.invalid') }}</span>
+                  <span class="node-count">{{ leftNodeCount }} {{ t('panel.nodes') }}</span>
+                </div>
+              </div>
+              <JsonEditorPanel
+                ref="leftEditorRef"
+                v-model="leftContent"
+                v-model:mode="leftMode"
+                :theme="theme"
+                label="left"
+                class="editor-wrapper"
+                @selection-change="(t) => leftSelectionType = t"
+              />
+            </template>
+          </div>
+          <div class="split-divider">
+            <div class="split-actions">
+              <button
+                class="split-btn"
+                :title="getCopyLeftTitle()"
+                @click="copyLeftToRight"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="9 18 15 12 9 6" />
+                </svg>
+              </button>
+              <button
+                class="split-btn"
+                :title="getCopyRightTitle()"
+                @click="copyRightToLeft"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="15 18 9 12 15 6" />
+                </svg>
+              </button>
+            </div>
+            <div class="split-drag-handle" :class="{ dragging: isDragging }" @mousedown="startDrag">
+              <svg class="drag-indicator" width="4" height="19" viewBox="0 0 4 19" fill="currentColor"><g transform="translate(-300 -755)"><rect width="2" height="1" transform="translate(300 755)" /><rect width="2" height="1" transform="translate(300 763)" /><rect width="2" height="1" transform="translate(300 757)" /><rect width="2" height="1" transform="translate(300 759)" /><rect width="2" height="1" transform="translate(300 761)" /><rect width="2" height="1" transform="translate(300 765)" /><rect width="2" height="1" transform="translate(300 773)" /><rect width="2" height="1" transform="translate(300 767)" /><rect width="2" height="1" transform="translate(300 769)" /><rect width="2" height="1" transform="translate(300 771)" /><rect width="2" height="1" transform="translate(302 755)" /><rect width="2" height="1" transform="translate(302 763)" /><rect width="2" height="1" transform="translate(302 757)" /><rect width="2" height="1" transform="translate(302 759)" /><rect width="2" height="1" transform="translate(302 761)" /><rect width="2" height="1" transform="translate(302 765)" /><rect width="2" height="1" transform="translate(302 773)" /><rect width="2" height="1" transform="translate(302 767)" /><rect width="2" height="1" transform="translate(302 769)" /><rect width="2" height="1" transform="translate(302 771)" /></g></svg>
+            </div>
+          </div>
+          <div
+            class="editor-section"
+            :class="{ 'drag-over': dragOverRight }"
+            :style="{ flex: `0 0 calc(${(1 - splitRatio) * 100}% - ${(1 - splitRatio) * 40}px)` }"
+          >
+            <div class="panel-header">
+              <span class="panel-title">{{ t('panel.draft') }}</span>
+              <div class="panel-status">
+                <span v-if="rightValidation.valid" class="status-ok">✓ {{ t('panel.valid') }}</span>
+                <span v-else class="status-err">✗ {{ t('panel.invalid') }}</span>
+                <span class="node-count">{{ rightNodeCount }} {{ t('panel.nodes') }}</span>
+              </div>
+            </div>
+            <JsonEditorPanel
+              ref="rightEditorRef"
+              v-model="rightDraft"
+              v-model:mode="rightMode"
+              :theme="theme"
+              label="right"
+              class="editor-wrapper"
+              @selection-change="(t) => rightSelectionType = t"
+            />
+          </div>
+        </div>
+        <div v-if="leftTabs.length > 0" class="folder-panel">
+          <div class="folder-header">{{ currentDir || t('folder.tempFile') }}</div>
+          <div class="folder-list">
+            <div v-if="dirLoading" class="folder-empty">{{ t('folder.loading') }}</div>
+            <div v-else-if="dirFiles.length === 0" class="folder-empty">{{ t('folder.empty') }}</div>
+            <div
+              v-for="f in dirFiles"
+              :key="f"
+              class="folder-item"
+              :class="{ active: f === fileName }"
+              @click="handleOpenFileFromFolder(f)"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="folder-icon">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+              </svg>
+              <span class="folder-item-name">{{ f }}</span>
+            </div>
           </div>
         </div>
       </div>
-      <div class="editor-split">
-      <div
-        class="editor-section"
-        :class="{ 'drag-over': dragOverLeft }"
-        :style="{ flex: `0 0 calc(${splitRatio * 100}% - ${splitRatio * 40}px)` }"
-      >
-        <div class="panel-header">
-          <span class="panel-title">{{ fileName }}</span>
-          <div class="panel-status">
-            <span v-if="leftValidation.valid" class="status-ok">✓ {{ t('panel.valid') }}</span>
-            <span v-else class="status-err">✗ {{ t('panel.invalid') }}</span>
-            <span class="node-count">{{ leftNodeCount }} {{ t('panel.nodes') }}</span>
-          </div>
-        </div>
-        <JsonEditorPanel
-          ref="leftEditorRef"
-          v-model="leftContent"
-          v-model:mode="leftMode"
-          :theme="theme"
-          label="left"
-          class="editor-wrapper"
-          @selection-change="(t) => leftSelectionType = t"
-        />
+      <div v-if="!leftValidation.valid && leftValidation.error" class="error-bar">
+        <span class="error-icon">⚠</span>
+        <span class="error-text">{{ leftValidation.error }}</span>
       </div>
-      <div class="split-divider">
-        <div class="split-actions">
-          <button
-            class="split-btn"
-            :title="getCopyLeftTitle()"
-            @click="copyLeftToRight"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="9 18 15 12 9 6" />
-            </svg>
-          </button>
-          <button
-            class="split-btn"
-            :title="getCopyRightTitle()"
-            @click="copyRightToLeft"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="15 18 9 12 15 6" />
-            </svg>
-          </button>
-        </div>
-        <div class="split-drag-handle" :class="{ dragging: isDragging }" @mousedown="startDrag">
-          <svg class="drag-indicator" width="4" height="19" viewBox="0 0 4 19" fill="currentColor"><g transform="translate(-300 -755)"><rect width="2" height="1" transform="translate(300 755)" /><rect width="2" height="1" transform="translate(300 763)" /><rect width="2" height="1" transform="translate(300 757)" /><rect width="2" height="1" transform="translate(300 759)" /><rect width="2" height="1" transform="translate(300 761)" /><rect width="2" height="1" transform="translate(300 765)" /><rect width="2" height="1" transform="translate(300 773)" /><rect width="2" height="1" transform="translate(300 767)" /><rect width="2" height="1" transform="translate(300 769)" /><rect width="2" height="1" transform="translate(300 771)" /><rect width="2" height="1" transform="translate(302 755)" /><rect width="2" height="1" transform="translate(302 763)" /><rect width="2" height="1" transform="translate(302 757)" /><rect width="2" height="1" transform="translate(302 759)" /><rect width="2" height="1" transform="translate(302 761)" /><rect width="2" height="1" transform="translate(302 765)" /><rect width="2" height="1" transform="translate(302 773)" /><rect width="2" height="1" transform="translate(302 767)" /><rect width="2" height="1" transform="translate(302 769)" /><rect width="2" height="1" transform="translate(302 771)" /></g></svg>
-        </div>
-      </div>
-      <div
-        class="editor-section"
-        :class="{ 'drag-over': dragOverRight }"
-        :style="{ flex: `0 0 calc(${(1 - splitRatio) * 100}% - ${(1 - splitRatio) * 40}px)` }"
-      >
-        <div class="panel-header">
-          <span class="panel-title">{{ t('panel.treeView') }}</span>
-          <div class="panel-status">
-            <span v-if="rightValidation.valid" class="status-ok">✓ {{ t('panel.valid') }}</span>
-            <span v-else class="status-err">✗ {{ t('panel.invalid') }}</span>
-            <span class="node-count">{{ rightNodeCount }} {{ t('panel.nodes') }}</span>
-          </div>
-        </div>
-        <JsonEditorPanel
-          ref="rightEditorRef"
-          v-model="rightContent"
-          v-model:mode="rightMode"
-          :theme="theme"
-          label="right"
-          class="editor-wrapper"
-          @selection-change="(t) => rightSelectionType = t"
-        />
-      </div>
-    </div>
-    <div v-if="!leftValidation.valid && leftValidation.error" class="error-bar">
-      <span class="error-icon">⚠</span>
-      <span class="error-text">{{ leftValidation.error }}</span>
-    </div>
-    <OpenUrlModal
-      v-if="showOpenUrlModal"
-      @close="showOpenUrlModal = false"
-      @load="handleUrlLoaded"
-    />
+      <OpenUrlModal
+        v-if="showOpenUrlModal"
+        @close="showOpenUrlModal = false"
+        @load="handleUrlLoaded"
+      />
     </div>
   </div>
 </template>
@@ -634,70 +752,12 @@ body {
   overflow: hidden;
 }
 
-.folder-panel {
-  width: 180px;
-  flex-shrink: 0;
-  background: var(--panel-header-bg);
-  border-right: 1px solid var(--border-color);
+.left-panel {
+  flex: 1;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-}
-
-.folder-header {
-  padding: 8px 12px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  border-bottom: 1px solid var(--border-color);
-  flex-shrink: 0;
-}
-
-.folder-list {
-  flex: 1;
-  overflow-y: auto;
-  padding: 4px;
-}
-
-.folder-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 12px;
-  color: var(--text-color);
-  transition: background 0.15s;
-  white-space: nowrap;
-}
-
-.folder-item:hover {
-  background: var(--btn-hover-bg);
-}
-
-.folder-item.active {
-  background: var(--btn-active-bg);
-  color: var(--accent-color, #3b82f6);
-}
-
-.folder-icon {
-  flex-shrink: 0;
-  opacity: 0.7;
-}
-
-.folder-item-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.folder-empty {
-  padding: 12px;
-  font-size: 12px;
-  color: var(--text-secondary);
-  text-align: center;
+  min-width: 0;
 }
 
 .editor-split {
@@ -706,18 +766,113 @@ body {
   overflow: hidden;
 }
 
+.editor-split.no-tabs {
+  flex: 1;
+}
+
 .editor-section {
   flex: 1;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   position: relative;
+  min-width: 0;
 }
 
 .editor-section.drag-over {
   outline: 2px dashed var(--accent-color, #3b82f6);
   outline-offset: -2px;
   background: rgba(59, 130, 246, 0.05);
+}
+
+.welcome-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  overflow-y: auto;
+}
+
+.welcome-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-color);
+  margin-bottom: 8px;
+}
+
+.welcome-subtitle {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 32px;
+}
+
+.recent-list {
+  width: 100%;
+  max-width: 480px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.recent-header {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+.recent-empty {
+  font-size: 13px;
+  color: var(--text-secondary);
+  padding: 20px;
+  text-align: center;
+}
+
+.recent-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-color);
+  cursor: pointer;
+  font-size: 13px;
+  text-align: left;
+  transition: all 0.15s;
+}
+
+.recent-item:hover {
+  background: var(--btn-hover-bg);
+  border-color: var(--text-secondary);
+}
+
+.recent-item svg {
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
+.recent-item-name {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-item-path {
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-left: auto;
+  padding-left: 12px;
 }
 
 .panel-header {
@@ -856,6 +1011,72 @@ body {
 .split-btn:hover {
   background: var(--btn-hover-bg);
   color: var(--text-color);
+}
+
+.folder-panel {
+  height: 160px;
+  flex-shrink: 0;
+  background: var(--panel-header-bg);
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.folder-header {
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.folder-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.folder-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-color);
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+
+.folder-item:hover {
+  background: var(--btn-hover-bg);
+}
+
+.folder-item.active {
+  background: var(--btn-active-bg);
+  color: var(--accent-color, #3b82f6);
+}
+
+.folder-icon {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.folder-item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.folder-empty {
+  padding: 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: center;
 }
 
 .error-bar {
