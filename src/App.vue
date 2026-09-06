@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { readTextFile } from '@tauri-apps/plugin-fs'
@@ -185,7 +185,6 @@ async function openFileInTab(path: string, content?: string) {
   leftTabs.value.push(tab)
   activeLeftTabId.value = tab.id
   pushRecentFile(path)
-  await openDirForFile(path)
 }
 
 function closeTab(id: string) {
@@ -417,6 +416,46 @@ async function loadDroppedFile(path: string, side: 'left' | 'right') {
 }
 
 // ---------------------------------------------------------------------------
+// Sidebar
+// ---------------------------------------------------------------------------
+const sidebarWidth = usePersistedState('sidebarWidth', 220)
+const isSidebarDragging = ref(false)
+
+function startSidebarDrag(e: MouseEvent) {
+  e.preventDefault()
+  isSidebarDragging.value = true
+  const container = document.querySelector('.left-panel') as HTMLElement
+  const onMove = (ev: MouseEvent) => {
+    if (!container) return
+    const rect = container.getBoundingClientRect()
+    const width = ev.clientX - rect.left
+    sidebarWidth.value = Math.min(320, Math.max(160, width))
+  }
+  const onUp = () => {
+    isSidebarDragging.value = false
+    document.removeEventListener('mousemove', onMove)
+    document.removeEventListener('mouseup', onUp)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+  }
+  document.addEventListener('mousemove', onMove)
+  document.addEventListener('mouseup', onUp)
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+}
+
+// Watch active tab to update folder directory
+watch(activeLeftTabId, async (newId) => {
+  const tab = leftTabs.value.find(t => t.id === newId)
+  if (tab?.path) {
+    await openDirForFile(tab.path)
+  } else {
+    currentDir.value = ''
+    dirFiles.value = []
+  }
+})
+
+// ---------------------------------------------------------------------------
 // File association
 // ---------------------------------------------------------------------------
 function normalizePath(input: string): string {
@@ -559,126 +598,127 @@ onBeforeUnmount(() => {
     />
     <div class="app-body">
       <div class="left-panel">
-        <TabBar
-          v-if="leftTabs.length > 0"
-          :tabs="leftTabs"
-          :active-id="activeLeftTabId"
-          @select="switchTab"
-          @close="closeTab"
-        />
-        <div class="editor-split" :class="{ 'no-tabs': leftTabs.length === 0 }">
-          <div
-            class="editor-section"
-            :class="{ 'drag-over': dragOverLeft }"
-            :style="{ flex: `0 0 calc(${splitRatio * 100}% - ${splitRatio * 40}px)` }"
-          >
-            <!-- 无 tab 时显示最近文件欢迎页 -->
-            <div v-if="leftTabs.length === 0" class="welcome-panel">
-              <div class="welcome-title">{{ t('welcome.title') }}</div>
-              <div class="welcome-subtitle">{{ t('welcome.subtitle') }}</div>
-              <div v-if="recentFiles.length" class="recent-list">
-                <div class="recent-header">{{ t('welcome.recentFiles') }}</div>
+        <div class="sidebar" :style="{ width: sidebarWidth + 'px' }">
+          <template v-if="leftTabs.length === 0">
+            <div class="sidebar-header">{{ t('welcome.recentFiles') }}</div>
+            <div class="sidebar-list">
+              <div v-if="recentFiles.length === 0" class="sidebar-empty">{{ t('welcome.noRecent') }}</div>
+              <button
+                v-for="file in recentFiles"
+                :key="file.path"
+                class="recent-item"
+                @click="handleOpenRecent(file.path)"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                </svg>
+                <span class="recent-item-name">{{ file.name }}</span>
+                <span class="recent-item-path">{{ file.path }}</span>
+              </button>
+            </div>
+          </template>
+          <template v-else>
+            <div class="folder-header">{{ currentDir || t('folder.tempFile') }}</div>
+            <div class="folder-list">
+              <div v-if="dirLoading" class="folder-empty">{{ t('folder.loading') }}</div>
+              <div v-else-if="dirFiles.length === 0" class="folder-empty">{{ t('folder.empty') }}</div>
+              <div
+                v-for="f in dirFiles"
+                :key="f"
+                class="folder-item"
+                :class="{ active: f === fileName }"
+                @click="handleOpenFileFromFolder(f)"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="folder-icon">
+                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                </svg>
+                <span class="folder-item-name">{{ f }}</span>
+              </div>
+            </div>
+          </template>
+        </div>
+        <div class="sidebar-divider" :class="{ dragging: isSidebarDragging }" @mousedown="startSidebarDrag"></div>
+        <div class="main-area">
+          <TabBar
+            v-if="leftTabs.length > 0"
+            :tabs="leftTabs"
+            :active-id="activeLeftTabId"
+            @select="switchTab"
+            @close="closeTab"
+          />
+          <div class="editor-split" :class="{ 'no-tabs': leftTabs.length === 0 }">
+            <div
+              class="editor-section"
+              :class="{ 'drag-over': dragOverLeft }"
+              :style="{ flex: `0 0 calc(${splitRatio * 100}% - ${splitRatio * 40}px)` }"
+            >
+              <template v-if="leftTabs.length > 0">
+                <div class="panel-header">
+                  <span class="panel-title">{{ fileName }}</span>
+                  <div class="panel-status">
+                    <span v-if="leftValidation.valid" class="status-ok">✓ {{ t('panel.valid') }}</span>
+                    <span v-else class="status-err">✗ {{ t('panel.invalid') }}</span>
+                    <span class="node-count">{{ leftNodeCount }} {{ t('panel.nodes') }}</span>
+                  </div>
+                </div>
+                <JsonEditorPanel
+                  ref="leftEditorRef"
+                  v-model="leftContent"
+                  v-model:mode="leftMode"
+                  :theme="theme"
+                  label="left"
+                  class="editor-wrapper"
+                  @selection-change="(t) => leftSelectionType = t"
+                />
+              </template>
+            </div>
+            <div class="split-divider">
+              <div class="split-actions">
                 <button
-                  v-for="file in recentFiles"
-                  :key="file.path"
-                  class="recent-item"
-                  @click="handleOpenRecent(file.path)"
+                  class="split-btn"
+                  :title="getCopyLeftTitle()"
+                  @click="copyLeftToRight"
                 >
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                    <polyline points="9 18 15 12 9 6" />
                   </svg>
-                  <span class="recent-item-name">{{ file.name }}</span>
-                  <span class="recent-item-path">{{ file.path }}</span>
+                </button>
+                <button
+                  class="split-btn"
+                  :title="getCopyRightTitle()"
+                  @click="copyRightToLeft"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="15 18 9 12 15 6" />
+                  </svg>
                 </button>
               </div>
-              <div v-else class="recent-empty">{{ t('welcome.noRecent') }}</div>
+              <div class="split-drag-handle" :class="{ dragging: isDragging }" @mousedown="startDrag">
+                <svg class="drag-indicator" width="4" height="19" viewBox="0 0 4 19" fill="currentColor"><g transform="translate(-300 -755)"><rect width="2" height="1" transform="translate(300 755)" /><rect width="2" height="1" transform="translate(300 763)" /><rect width="2" height="1" transform="translate(300 757)" /><rect width="2" height="1" transform="translate(300 759)" /><rect width="2" height="1" transform="translate(300 761)" /><rect width="2" height="1" transform="translate(300 765)" /><rect width="2" height="1" transform="translate(300 773)" /><rect width="2" height="1" transform="translate(300 767)" /><rect width="2" height="1" transform="translate(300 769)" /><rect width="2" height="1" transform="translate(300 771)" /><rect width="2" height="1" transform="translate(302 755)" /><rect width="2" height="1" transform="translate(302 763)" /><rect width="2" height="1" transform="translate(302 757)" /><rect width="2" height="1" transform="translate(302 759)" /><rect width="2" height="1" transform="translate(302 761)" /><rect width="2" height="1" transform="translate(302 765)" /><rect width="2" height="1" transform="translate(302 773)" /><rect width="2" height="1" transform="translate(302 767)" /><rect width="2" height="1" transform="translate(302 769)" /><rect width="2" height="1" transform="translate(302 771)" /></g></svg>
+              </div>
             </div>
-            <!-- 有 tab 时显示编辑器 + 文件夹 -->
-            <template v-else>
+            <div
+              class="editor-section"
+              :class="{ 'drag-over': dragOverRight }"
+              :style="{ flex: `0 0 calc(${(1 - splitRatio) * 100}% - ${(1 - splitRatio) * 40}px)` }"
+            >
               <div class="panel-header">
-                <span class="panel-title">{{ fileName }}</span>
+                <span class="panel-title">{{ t('panel.draft') }}</span>
                 <div class="panel-status">
-                  <span v-if="leftValidation.valid" class="status-ok">✓ {{ t('panel.valid') }}</span>
+                  <span v-if="rightValidation.valid" class="status-ok">✓ {{ t('panel.valid') }}</span>
                   <span v-else class="status-err">✗ {{ t('panel.invalid') }}</span>
-                  <span class="node-count">{{ leftNodeCount }} {{ t('panel.nodes') }}</span>
+                  <span class="node-count">{{ rightNodeCount }} {{ t('panel.nodes') }}</span>
                 </div>
               </div>
               <JsonEditorPanel
-                ref="leftEditorRef"
-                v-model="leftContent"
-                v-model:mode="leftMode"
+                ref="rightEditorRef"
+                v-model="rightDraft"
+                v-model:mode="rightMode"
                 :theme="theme"
-                label="left"
+                label="right"
                 class="editor-wrapper"
-                @selection-change="(t) => leftSelectionType = t"
+                @selection-change="(t) => rightSelectionType = t"
               />
-            </template>
-          </div>
-          <div class="split-divider">
-            <div class="split-actions">
-              <button
-                class="split-btn"
-                :title="getCopyLeftTitle()"
-                @click="copyLeftToRight"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <polyline points="9 18 15 12 9 6" />
-                </svg>
-              </button>
-              <button
-                class="split-btn"
-                :title="getCopyRightTitle()"
-                @click="copyRightToLeft"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <polyline points="15 18 9 12 15 6" />
-                </svg>
-              </button>
-            </div>
-            <div class="split-drag-handle" :class="{ dragging: isDragging }" @mousedown="startDrag">
-              <svg class="drag-indicator" width="4" height="19" viewBox="0 0 4 19" fill="currentColor"><g transform="translate(-300 -755)"><rect width="2" height="1" transform="translate(300 755)" /><rect width="2" height="1" transform="translate(300 763)" /><rect width="2" height="1" transform="translate(300 757)" /><rect width="2" height="1" transform="translate(300 759)" /><rect width="2" height="1" transform="translate(300 761)" /><rect width="2" height="1" transform="translate(300 765)" /><rect width="2" height="1" transform="translate(300 773)" /><rect width="2" height="1" transform="translate(300 767)" /><rect width="2" height="1" transform="translate(300 769)" /><rect width="2" height="1" transform="translate(300 771)" /><rect width="2" height="1" transform="translate(302 755)" /><rect width="2" height="1" transform="translate(302 763)" /><rect width="2" height="1" transform="translate(302 757)" /><rect width="2" height="1" transform="translate(302 759)" /><rect width="2" height="1" transform="translate(302 761)" /><rect width="2" height="1" transform="translate(302 765)" /><rect width="2" height="1" transform="translate(302 773)" /><rect width="2" height="1" transform="translate(302 767)" /><rect width="2" height="1" transform="translate(302 769)" /><rect width="2" height="1" transform="translate(302 771)" /></g></svg>
-            </div>
-          </div>
-          <div
-            class="editor-section"
-            :class="{ 'drag-over': dragOverRight }"
-            :style="{ flex: `0 0 calc(${(1 - splitRatio) * 100}% - ${(1 - splitRatio) * 40}px)` }"
-          >
-            <div class="panel-header">
-              <span class="panel-title">{{ t('panel.draft') }}</span>
-              <div class="panel-status">
-                <span v-if="rightValidation.valid" class="status-ok">✓ {{ t('panel.valid') }}</span>
-                <span v-else class="status-err">✗ {{ t('panel.invalid') }}</span>
-                <span class="node-count">{{ rightNodeCount }} {{ t('panel.nodes') }}</span>
-              </div>
-            </div>
-            <JsonEditorPanel
-              ref="rightEditorRef"
-              v-model="rightDraft"
-              v-model:mode="rightMode"
-              :theme="theme"
-              label="right"
-              class="editor-wrapper"
-              @selection-change="(t) => rightSelectionType = t"
-            />
-          </div>
-        </div>
-        <div v-if="leftTabs.length > 0" class="folder-panel">
-          <div class="folder-header">{{ currentDir || t('folder.tempFile') }}</div>
-          <div class="folder-list">
-            <div v-if="dirLoading" class="folder-empty">{{ t('folder.loading') }}</div>
-            <div v-else-if="dirFiles.length === 0" class="folder-empty">{{ t('folder.empty') }}</div>
-            <div
-              v-for="f in dirFiles"
-              :key="f"
-              class="folder-item"
-              :class="{ active: f === fileName }"
-              @click="handleOpenFileFromFolder(f)"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="folder-icon">
-                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-              </svg>
-              <span class="folder-item-name">{{ f }}</span>
             </div>
           </div>
         </div>
@@ -755,7 +795,7 @@ body {
 .left-panel {
   flex: 1;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   overflow: hidden;
   min-width: 0;
 }
@@ -835,22 +875,21 @@ body {
 .recent-item {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   width: 100%;
-  padding: 10px 14px;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
+  padding: 5px 8px;
+  border: none;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-color);
   cursor: pointer;
-  font-size: 13px;
+  font-size: 12px;
   text-align: left;
   transition: all 0.15s;
 }
 
 .recent-item:hover {
   background: var(--btn-hover-bg);
-  border-color: var(--text-secondary);
 }
 
 .recent-item svg {
@@ -866,13 +905,14 @@ body {
 }
 
 .recent-item-path {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   margin-left: auto;
-  padding-left: 12px;
+  padding-left: 8px;
+  max-width: 100px;
 }
 
 .panel-header {
@@ -1011,6 +1051,57 @@ body {
 .split-btn:hover {
   background: var(--btn-hover-bg);
   color: var(--text-color);
+}
+
+.sidebar {
+  width: 220px;
+  flex-shrink: 0;
+  background: var(--panel-header-bg);
+  border-right: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sidebar-divider {
+  width: 4px;
+  cursor: col-resize;
+  background: var(--border-color);
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.sidebar-divider:hover,
+.sidebar-divider.dragging {
+  background: var(--text-secondary);
+}
+
+.main-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.sidebar-header {
+  padding: 8px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.sidebar-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .folder-panel {
