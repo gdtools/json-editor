@@ -25,6 +25,7 @@ interface EditorTab {
   name: string
   content: string
   mode: EditorMode
+  dirty: boolean
 }
 
 const leftTabs = ref<EditorTab[]>([])
@@ -54,6 +55,7 @@ const leftContent = computed({
   set: (v: string) => {
     if (activeTab.value) {
       activeTab.value.content = v
+      activeTab.value.dirty = true
     }
   }
 })
@@ -181,6 +183,7 @@ async function openFileInTab(path: string, content?: string) {
     name,
     content: text,
     mode: 'tree',
+    dirty: false,
   }
   leftTabs.value.push(tab)
   activeLeftTabId.value = tab.id
@@ -217,6 +220,7 @@ async function handleNew() {
     name: 'untitled.json',
     content: '{}',
     mode: 'tree',
+    dirty: true,
   }
   leftTabs.value.push(tab)
   activeLeftTabId.value = tab.id
@@ -242,6 +246,7 @@ async function handleSave() {
   if (tab.path) {
     try {
       await writeJsonFile(tab.path, tab.content)
+      tab.dirty = false
       pushRecentFile(tab.path)
       await openDirForFile(tab.path)
     } catch (e) {
@@ -255,6 +260,7 @@ async function handleSave() {
   if (path) {
     tab.path = path
     tab.name = path.split(/[\\/]/).pop() || tab.name
+    tab.dirty = false
     pushRecentFile(path)
     await openDirForFile(path)
   }
@@ -269,6 +275,7 @@ async function handleSaveAs() {
   if (path) {
     tab.path = path
     tab.name = path.split(/[\\/]/).pop() || tab.name
+    tab.dirty = false
     pushRecentFile(path)
     await openDirForFile(path)
   }
@@ -286,6 +293,7 @@ function handleUrlLoaded(content: string, name: string) {
     name,
     content,
     mode: 'tree',
+    dirty: true,
   }
   leftTabs.value.push(tab)
   activeLeftTabId.value = tab.id
@@ -571,6 +579,16 @@ const rightValidation = computed(() => validateJson(rightDraft.value))
 const rightNodeCount = computed(() => countJsonNodes(rightDraft.value))
 
 // ---------------------------------------------------------------------------
+// Keyboard shortcuts
+// ---------------------------------------------------------------------------
+function onKeyDown(e: KeyboardEvent) {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+    e.preventDefault()
+    handleSave()
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
 onMounted(() => {
@@ -578,10 +596,12 @@ onMounted(() => {
   setupFileAssociation()
   setupMenuShortcuts()
   setupDragDrop()
+  document.addEventListener('keydown', onKeyDown)
 })
 
 onBeforeUnmount(() => {
   unlistenFns.forEach(fn => fn())
+  document.removeEventListener('keydown', onKeyDown)
 })
 </script>
 

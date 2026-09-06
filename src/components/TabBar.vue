@@ -3,6 +3,7 @@ interface Tab {
   id: string
   path: string
   name: string
+  dirty?: boolean
 }
 
 defineProps<{
@@ -25,7 +26,10 @@ const emit = defineEmits<{
       :class="{ active: tab.id === activeId }"
       @click="emit('select', tab.id)"
     >
-      <span class="tab-name" :title="tab.path || tab.name">{{ tab.name }}</span>
+      <span class="tab-name" :title="tab.path || tab.name">
+        {{ tab.name }}
+        <span v-if="tab.dirty" class="tab-dirty"> (*)</span>
+      </span>
       <span class="tab-close" @click.stop="emit('close', tab.id)">×</span>
     </button>
   </div>
@@ -100,8 +104,12 @@ const emit = defineEmits<{
   transition: all 0.15s;
 }
 
-.tab-close:hover {
-  background: var(--btn-active-bg);
-  color: var(--text-color);
+.tab-dirty {
+  color: #ef4444;
+  font-weight: 600;
+}
+
+:root[data-theme="dark"] .tab-dirty {
+  color: #f87171;
 }
 </style>
