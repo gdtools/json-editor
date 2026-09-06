@@ -16,10 +16,11 @@ export async function openJsonFile(): Promise<{ path: string; content: string } 
   return { path: filePath as string, content }
 }
 
-export async function saveJsonFile(content: string, defaultName = 'untitled.json'): Promise<string | null> {
+export async function saveJsonFile(content: string, defaultName = 'untitled.json', defaultDir?: string): Promise<string | null> {
+  const defaultPath = defaultDir ? (defaultDir.replace(/[\\/]$/, '') + '/' + defaultName) : defaultName
   const filePath = await saveDialog({
     filters: JSON_FILTERS,
-    defaultPath: defaultName,
+    defaultPath: defaultPath,
   })
   if (!filePath) return null
   await writeTextFile(filePath, content)

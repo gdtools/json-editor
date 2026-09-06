@@ -213,6 +213,7 @@ async function handleOpen() {
   try {
     const result = await openJsonFile()
     if (result) {
+      await invoke('allow_file', { path: result.path })
       leftContent.value = result.content
       fileName.value = result.path.split(/[\\/]/).pop() || 'untitled.json'
       fileLoaded = false
@@ -226,6 +227,7 @@ async function handleOpen() {
 
 async function handleOpenRecent(path: string) {
   try {
+    await invoke('allow_file', { path })
     const content = await readTextFile(path)
     leftContent.value = content
     fileName.value = path.split(/[\\/]/).pop() || 'untitled.json'
@@ -234,6 +236,7 @@ async function handleOpenRecent(path: string) {
     await openDirForFile(path)
   } catch (e) {
     console.error('Failed to open recent file:', e)
+    alert('无法打开文件：' + path + '\n文件可能已被移动或删除。')
   }
 }
 
@@ -378,19 +381,37 @@ const currentDir = ref('')
 const dirFiles = ref<string[]>([])
 const dirLoading = ref(false)
 
+function getFileDir(filePath: string): string {
+  const lastSep = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'))
+  if (lastSep <= 0) return ''
+  let dir = filePath.substring(0, lastSep)
+  // Windows: C: 不是合法目录，需要补成 C:\
+  if (/^[A-Za-z]:$/.test(dir)) {
+    dir = dir + '\\'
+  }
+  return dir
+}
+
 async function openDirForFile(filePath: string) {
-  const dir = filePath.replace(/[\\/][^\\/]*$/, '') || filePath
-  await loadDirFiles(dir)
+  const dir = getFileDir(filePath)
+  if (dir) {
+    await loadDirFiles(dir)
+  } else {
+    currentDir.value = ''
+    dirFiles.value = []
+  }
 }
 
 async function loadDirFiles(dirPath: string) {
-  if (!dirPath || dirPath === currentDir.value) return
+  if (!dirPath) return
+  // 总是刷新，避免缓存导致旧目录残留
+  currentDir.value = dirPath
   dirLoading.value = true
   try {
+    await invoke('allow_directory', { path: dirPath })
     const { listJsonFiles } = await import('./utils/file')
     const files = await listJsonFiles(dirPath)
     dirFiles.value = files
-    currentDir.value = dirPath
   } catch (e) {
     console.error('Failed to load directory:', e)
     dirFiles.value = []
@@ -403,18 +424,21 @@ async function handleOpenFileFromFolder(fName: string) {
   if (!currentDir.value) return
   const fullPath = currentDir.value.replace(/[\\/]$/, '') + '/' + fName
   try {
+    await invoke('allow_file', { path: fullPath })
     const content = await readTextFile(fullPath)
     leftContent.value = content
     fileName.value = fName
     pushRecentFile(fullPath)
   } catch (e) {
     console.error('Failed to open file from folder:', e)
+    alert('无法打开文件：' + fullPath)
   }
 }
 
 async function handleSaveAs() {
   try {
-    const path = await saveJsonFile(leftContent.value, fileName.value)
+    const defaultDir = currentDir.value || undefined
+    const path = await saveJsonFile(leftContent.value, fileName.value, defaultDir)
     if (path) {
       fileName.value = path.split(/[\\/]/).pop() || fileName.value
       pushRecentFile(path)
@@ -449,8 +473,8 @@ async function handleSaveAs() {
       @update:mode="(m) => { leftMode = m; rightMode = m }"
     />
     <div class="app-body">
-      <div class="folder-panel" v-if="currentDir">
-        <div class="folder-header">{{ t('folder.title') }}</div>
+      <div class="folder-panel">
+        <div class="folder-header">{{ currentDir || t('folder.tempFile') }}</div>
         <div class="folder-list">
           <div v-if="dirLoading" class="folder-empty">{{ t('folder.loading') }}</div>
           <div v-else-if="dirFiles.length === 0" class="folder-empty">{{ t('folder.empty') }}</div>

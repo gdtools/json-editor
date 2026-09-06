@@ -24,6 +24,20 @@ fn opened_paths(app: tauri::AppHandle) -> Vec<String> {
     paths
 }
 
+// 动态授权前端读取单个文件（用于最近文件、手动打开的文件等）
+#[tauri::command]
+fn allow_file(app: tauri::AppHandle, path: String) {
+    use tauri_plugin_fs::FsExt;
+    let _ = app.fs_scope().allow_file(std::path::Path::new(&path));
+}
+
+// 动态授权前端读取目录（用于左侧文件夹浏览器）
+#[tauri::command]
+fn allow_directory(app: tauri::AppHandle, path: String) {
+    use tauri_plugin_fs::FsExt;
+    let _ = app.fs_scope().allow_directory(std::path::Path::new(&path), tauri_plugin_fs::ScopeDirectoryType::Recursive);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -31,7 +45,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
-        .invoke_handler(tauri::generate_handler![opened_paths])
+        .invoke_handler(tauri::generate_handler![opened_paths, allow_file, allow_directory])
         .setup(|app| {
             // macOS 自定义菜单：绑定快捷键并通过事件通知前端
             let new_item = MenuItemBuilder::with_id("new", "New")

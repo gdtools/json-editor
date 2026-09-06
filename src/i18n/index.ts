@@ -63,6 +63,7 @@ export const messages: Record<Lang, Dict> = {
     'folder.title': '当前文件夹',
     'folder.empty': '无 JSON 文件',
     'folder.loading': '加载中…',
+    'folder.tempFile': '临时文件',
   },
   'en-US': {
     'toolbar.new': 'New',
@@ -93,6 +94,7 @@ export const messages: Record<Lang, Dict> = {
     'folder.title': 'Current Folder',
     'folder.empty': 'No JSON files',
     'folder.loading': 'Loading…',
+    'folder.tempFile': 'Temporary File',
   },
 }
 
