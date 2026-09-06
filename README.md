@@ -1,5 +1,7 @@
 # JsonEditor
 
+[English](./README.md) | [中文](./README-zh.md)
+
 A lightweight, cross-platform desktop JSON editor built with Tauri, Vue 3, and [vanilla-jsoneditor](https://github.com/josdejong/jsoneditor). Tiny installer (~5-10 MB), fast startup, low memory. Features a dual-pane layout with independent editing modes, dark/light theme, and persistent state.
 
 <img width="1876" height="1200" alt="image" src="https://github.com/user-attachments/assets/81f2232a-e1ff-451c-b1be-65cd9c6a94ad" />
