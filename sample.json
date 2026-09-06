@@ -1,0 +1,7 @@
+{
+  "name": "test-sample",
+  "version": "0.1.4",
+  "features": ["file-association", "dark-mode"],
+  "nested": { "a": 1, "b": [true, false, null] },
+  "unicode": "中文测试 ✓"
+}
