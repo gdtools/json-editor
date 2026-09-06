@@ -25,3 +25,6 @@ dist-ssr
 
 # Rust / Tauri
 src-tauri/target
+
+# Local workspace data (WorkBuddy memory/screenshots)
+.workbuddy/
