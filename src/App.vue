@@ -94,7 +94,7 @@ async function loadDroppedFile(path: string, side: 'left' | 'right') {
     const content = await readTextFile(path)
     if (side === 'left') {
       leftContent.value = content
-      fileName.value = path.split('/').pop() || 'untitled.json'
+      fileName.value = path.split(/[\\/]/).pop() || 'untitled.json'
       await nextTick()
       leftEditorRef.value?.setText(content)
     } else {
@@ -107,24 +107,28 @@ async function loadDroppedFile(path: string, side: 'left' | 'right') {
   }
 }
 
-// 处理通过文件关联打开的 JSON 文件
-function fileUrlToPath(url: string): string {
-  // file:// URL 转为文件路径
-  if (url.startsWith('file://')) {
-    return decodeURIComponent(url.slice(7))
+// 处理通过文件关联 / 命令行 / macOS Opened 打开的 JSON 文件
+// Rust 侧统一传递真实文件路径字符串（Windows 反斜杠、macOS 正斜杠）。
+// 这里做一层兼容：若意外收到 file:// URL 也照常处理。
+function normalizePath(input: string): string {
+  if (input.startsWith('file://')) {
+    // file:///C:/Users/x.json -> C:/Users/x.json（去掉 file:// 后的多余斜杠）
+    let p = decodeURIComponent(input.slice('file://'.length))
+    if (/^\/[a-zA-Z]:/.test(p)) p = p.slice(1)
+    return p
   }
-  return url
+  return input
 }
 
-async function loadFileFromUrl(url: string) {
+async function loadFileFromPath(rawPath: string) {
   if (fileLoaded) return
   fileLoaded = true
   try {
-    const path = fileUrlToPath(url)
+    const path = normalizePath(rawPath)
     console.log('[file-association] loading file:', path)
     const content = await readTextFile(path)
     leftContent.value = content
-    fileName.value = path.split('/').pop() || 'untitled.json'
+    fileName.value = path.split(/[\\/]/).pop() || 'untitled.json'
     // 确保 editor 已初始化并同步内容
     await nextTick()
     leftEditorRef.value?.setText(content)
@@ -139,11 +143,11 @@ let fileLoaded = false
 
 async function setupFileAssociation() {
   try {
-    // 先注册 listener，防止 RunEvent::Opened 事件被错过
+    // 注册 listener，处理运行中再次打开文件（macOS Opened / Windows 二次启动）
     const unlisten = await listen<string[]>('opened', (event) => {
       console.log('[file-association] opened event:', event.payload)
-      if (event.payload && event.payload.length > 0) {
-        loadFileFromUrl(event.payload[0])
+      for (const p of event.payload ?? []) {
+        loadFileFromPath(p)
       }
     })
     unlistenFns.push(unlisten)
@@ -151,11 +155,11 @@ async function setupFileAssociation() {
     // 等待子组件 editor 初始化完成
     await new Promise(resolve => setTimeout(resolve, 100))
 
-    // 冷启动：RunEvent::Opened 在 app 启动前已触发，URL 已存储在 Rust 全局变量中
-    const urls = await invoke<string[]>('opened_urls')
-    console.log('[file-association] initial URLs:', urls)
-    if (urls.length > 0) {
-      await loadFileFromUrl(urls[0])
+    // 冷启动：Windows/Linux 命令行参数、macOS Opened 都已在 Rust 全局变量中
+    const paths = await invoke<string[]>('opened_paths')
+    console.log('[file-association] initial paths:', paths)
+    for (const p of paths) {
+      await loadFileFromPath(p)
     }
   } catch (e) {
     console.log('[file-association] setup failed (expected in browser):', e)
@@ -205,7 +209,7 @@ async function handleOpen() {
     const result = await openJsonFile()
     if (result) {
       leftContent.value = result.content
-      fileName.value = result.path.split('/').pop() || 'untitled.json'
+      fileName.value = result.path.split(/[\\/]/).pop() || 'untitled.json'
       fileLoaded = false
     }
   } catch (e) {
@@ -217,7 +221,7 @@ async function handleSave() {
   try {
     const path = await saveJsonFile(leftContent.value, fileName.value)
     if (path) {
-      fileName.value = path.split('/').pop() || fileName.value
+      fileName.value = path.split(/[\\/]/).pop() || fileName.value
     }
   } catch (e) {
     console.error('Failed to save file:', e)
