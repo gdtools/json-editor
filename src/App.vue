@@ -10,7 +10,7 @@ import TabBar from './components/TabBar.vue'
 import OpenUrlModal from './components/OpenUrlModal.vue'
 import type { EditorMode, ThemeMode } from './types'
 import { t } from './i18n'
-import { openJsonFile, saveJsonFile } from './utils/file'
+import { openJsonFile, saveJsonFile, writeJsonFile } from './utils/file'
 import { formatJson, compactJson, validateJson, countJsonNodes, tryParseJson } from './utils/json'
 import { usePersistedState } from './composables/usePersistedState'
 
@@ -238,9 +238,20 @@ async function handleOpenRecent(path: string) {
 async function handleSave() {
   if (!activeTab.value) return
   const tab = activeTab.value
-  const defaultName = tab.path ? tab.path.split(/[\\/]/).pop() || tab.name : tab.name
-  const defaultDir = tab.path ? getFileDir(tab.path) : undefined
-  const path = await saveJsonFile(tab.content, defaultName, defaultDir)
+  // 已有路径：直接保存，不弹窗
+  if (tab.path) {
+    try {
+      await writeJsonFile(tab.path, tab.content)
+      pushRecentFile(tab.path)
+      await openDirForFile(tab.path)
+    } catch (e) {
+      console.error('Failed to save file:', e)
+      alert('保存失败：' + (e instanceof Error ? e.message : String(e)))
+    }
+    return
+  }
+  // 无路径：弹出另存为
+  const path = await saveJsonFile(tab.content, tab.name)
   if (path) {
     tab.path = path
     tab.name = path.split(/[\\/]/).pop() || tab.name

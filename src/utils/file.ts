@@ -27,6 +27,10 @@ export async function saveJsonFile(content: string, defaultName = 'untitled.json
   return filePath
 }
 
+export async function writeJsonFile(path: string, content: string): Promise<void> {
+  await writeTextFile(path, content)
+}
+
 export async function listJsonFiles(dirPath: string): Promise<string[]> {
   try {
     const entries = await readDir(dirPath)
