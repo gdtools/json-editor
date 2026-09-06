@@ -8,6 +8,7 @@ import JsonEditorPanel from './components/JsonEditorPanel.vue'
 import Toolbar from './components/Toolbar.vue'
 import OpenUrlModal from './components/OpenUrlModal.vue'
 import type { EditorMode, ThemeMode } from './types'
+import { t } from './i18n'
 import { openJsonFile, saveJsonFile } from './utils/file'
 import { formatJson, compactJson, validateJson, countJsonNodes, tryParseJson } from './utils/json'
 import { usePersistedState } from './composables/usePersistedState'
@@ -329,9 +330,9 @@ const dragOverRight = ref(false)
         <div class="panel-header">
           <span class="panel-title">{{ fileName }}</span>
           <div class="panel-status">
-            <span v-if="leftValidation.valid" class="status-ok">✓ Valid</span>
-            <span v-else class="status-err">✗ Invalid</span>
-            <span class="node-count">{{ leftNodeCount }} nodes</span>
+            <span v-if="leftValidation.valid" class="status-ok">✓ {{ t('panel.valid') }}</span>
+            <span v-else class="status-err">✗ {{ t('panel.invalid') }}</span>
+            <span class="node-count">{{ leftNodeCount }} {{ t('panel.nodes') }}</span>
           </div>
         </div>
         <JsonEditorPanel
@@ -366,11 +367,11 @@ const dragOverRight = ref(false)
         :style="{ flex: `0 0 calc(${(1 - splitRatio) * 100}% - ${(1 - splitRatio) * 40}px)` }"
       >
         <div class="panel-header">
-          <span class="panel-title">Tree View</span>
+          <span class="panel-title">{{ t('panel.treeView') }}</span>
           <div class="panel-status">
-            <span v-if="rightValidation.valid" class="status-ok">✓ Valid</span>
-            <span v-else class="status-err">✗ Invalid</span>
-            <span class="node-count">{{ rightNodeCount }} nodes</span>
+            <span v-if="rightValidation.valid" class="status-ok">✓ {{ t('panel.valid') }}</span>
+            <span v-else class="status-err">✗ {{ t('panel.invalid') }}</span>
+            <span class="node-count">{{ rightNodeCount }} {{ t('panel.nodes') }}</span>
           </div>
         </div>
         <JsonEditorPanel

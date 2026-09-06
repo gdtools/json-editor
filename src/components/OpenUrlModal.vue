@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { parseCurl } from '../utils/curl'
+import { t } from '../i18n'
 
 const emit = defineEmits<{
   close: []
@@ -14,7 +15,7 @@ const error = ref('')
 async function handleLoad() {
   error.value = ''
   if (!curlInput.value.trim()) {
-    error.value = 'Please paste a curl command'
+    error.value = t('modal.emptyError')
     return
   }
 
@@ -66,8 +67,8 @@ function handleBackdropClick(e: MouseEvent) {
   <div class="modal-backdrop" @click="handleBackdropClick">
     <div class="modal">
       <div class="modal-header">
-        <h3>Open from URL</h3>
-        <button class="modal-close" title="Close" @click="emit('close')">
+        <h3>{{ t('modal.title') }}</h3>
+        <button class="modal-close" :title="t('modal.close')" @click="emit('close')">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="18" y1="6" x2="6" y2="18" />
             <line x1="6" y1="6" x2="18" y2="18" />
@@ -75,11 +76,11 @@ function handleBackdropClick(e: MouseEvent) {
         </button>
       </div>
       <div class="modal-body">
-        <p class="modal-hint">Paste a curl command below. URL, method, headers (including Authorization), and body will be parsed automatically.</p>
+        <p class="modal-hint">{{ t('modal.hint') }}</p>
         <textarea
           v-model="curlInput"
           class="curl-input"
-          placeholder="curl -X GET 'https://api.example.com/data' -H 'Authorization: Bearer token123'"
+          :placeholder="t('modal.placeholder')"
           rows="8"
           :disabled="loading"
           @keydown.ctrl.enter="handleLoad"
@@ -87,9 +88,9 @@ function handleBackdropClick(e: MouseEvent) {
         <div v-if="error" class="modal-error">{{ error }}</div>
       </div>
       <div class="modal-footer">
-        <button class="btn btn-secondary" @click="emit('close')" :disabled="loading">Cancel</button>
+        <button class="btn btn-secondary" @click="emit('close')" :disabled="loading">{{ t('modal.cancel') }}</button>
         <button class="btn btn-primary" @click="handleLoad" :disabled="loading">
-          {{ loading ? 'Loading...' : 'Load' }}
+          {{ loading ? t('modal.loading') : t('modal.load') }}
         </button>
       </div>
     </div>

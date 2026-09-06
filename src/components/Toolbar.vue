@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import type { EditorMode, ThemeMode } from '../types'
+import { lang, t, toggleLang } from '../i18n'
 
 defineProps<{
   mode: EditorMode
@@ -65,19 +66,19 @@ onUnmounted(() => {
   <div class="toolbar">
     <div class="toolbar-left">
       <img class="app-logo" src="../assets/json-editor.svg" alt="JsonEditor" />
-      <button class="btn btn-icon" :title="`New (${modKey}N)`" @click="emit('new')">
+      <button class="btn btn-icon" :title="`${t('toolbar.new')} (${modKey}N)`" @click="emit('new')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
           <polyline points="14 2 14 8 20 8" />
         </svg>
-        <span>New</span>
+        <span>{{ t('toolbar.new') }}</span>
       </button>
       <div class="open-dropdown">
-        <button class="btn btn-icon" title="Open" @click="toggleOpenMenu">
+        <button class="btn btn-icon" :title="t('toolbar.open')" @click="toggleOpenMenu">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
           </svg>
-          <span>Open</span>
+          <span>{{ t('toolbar.open') }}</span>
           <svg class="dropdown-arrow" :class="{ open: showOpenMenu }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="6 9 12 15 18 9" />
           </svg>
@@ -87,7 +88,7 @@ onUnmounted(() => {
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
             </svg>
-            <span>Open File</span>
+            <span>{{ t('toolbar.openFile') }}</span>
             <span class="shortcut-hint">{{ modKey }}O</span>
           </button>
           <button class="dropdown-item" @click="() => { closeOpenMenu(); emit('openUrl') }">
@@ -96,25 +97,25 @@ onUnmounted(() => {
               <line x1="2" y1="12" x2="22" y2="12" />
               <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
             </svg>
-            <span>Open from URL</span>
+            <span>{{ t('toolbar.openUrl') }}</span>
             <span class="shortcut-hint">{{ modKey }}{{ shiftKey }}O</span>
           </button>
         </div>
       </div>
-      <button class="btn btn-icon" :title="`Save File (${modKey}S)`" @click="emit('save')">
+      <button class="btn btn-icon" :title="`${t('toolbar.save')} (${modKey}S)`" @click="emit('save')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
           <polyline points="17 21 17 13 7 13 7 21" />
           <polyline points="7 3 7 8 15 8" />
         </svg>
-        <span>Save</span>
+        <span>{{ t('toolbar.save') }}</span>
       </button>
-      <button class="btn btn-icon" title="Copy to Clipboard" @click="emit('copy')">
+      <button class="btn btn-icon" :title="t('toolbar.copy')" @click="emit('copy')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
           <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
         </svg>
-        <span>Copy</span>
+        <span>{{ t('toolbar.copy') }}</span>
       </button>
       <!-- <div class="divider" />
       <button class="btn btn-icon" title="Format JSON" @click="emit('format')">
@@ -165,7 +166,16 @@ onUnmounted(() => {
         </button>
       </div>
       <div class="divider" /> -->
-      <button class="btn btn-theme" title="Toggle Theme" @click="emit('toggle-theme')">
+      <button class="btn btn-lang" :title="t('toolbar.lang')" @click="toggleLang">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="9" />
+          <line x1="3" y1="12" x2="21" y2="12" />
+          <path d="M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18z" />
+        </svg>
+        <span>{{ lang === 'zh-CN' ? '中' : 'EN' }}</span>
+      </button>
+      <div class="divider" />
+      <button class="btn btn-theme" :title="t('toolbar.theme')" @click="emit('toggle-theme')">
         <svg v-if="theme === 'light'" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
         </svg>
@@ -183,7 +193,7 @@ onUnmounted(() => {
       </button>
       <div class="divider" />
       <div class="about-dropdown">
-        <button class="btn btn-icon" title="About" @click="showAbout = !showAbout">
+        <button class="btn btn-icon" :title="t('toolbar.about')" @click="showAbout = !showAbout">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
             <circle cx="12" cy="12" r="9.5" stroke="currentColor" stroke-width="1.6"/>
             <circle cx="12" cy="7.6" r="1.05" fill="currentColor"/>
@@ -194,7 +204,7 @@ onUnmounted(() => {
           <div class="about-content">
             <img class="about-logo" src="../assets/json-editor.svg" alt="JsonEditor" />
             <div class="about-text">
-              <div class="about-title">JsonEditor v0.1.4</div>
+              <div class="about-title">{{ t('about.version') }}</div>
               <a class="about-link" :href="PROJECT_URL" target="_blank" rel="noopener">{{ PROJECT_URL }}</a>
             </div>
           </div>
@@ -295,6 +305,16 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.btn-lang {
+  padding: 6px 10px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.btn-lang svg {
+  flex-shrink: 0;
 }
 
 .open-dropdown {
