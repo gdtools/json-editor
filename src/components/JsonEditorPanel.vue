@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, watch, shallowRef } from 'vue'
-import { createJSONEditor, isJSONContent, isTextContent, Mode } from 'vanilla-jsoneditor'
+import { createJSONEditor, isJSONContent, isTextContent, Mode, type MenuItem, type ContextMenuItem } from 'vanilla-jsoneditor'
 import type { EditorMode, ThemeMode } from '../types'
 import { tryParseJson } from '../utils/json'
+import { translateEditorMenu } from '../i18n'
 
 const props = withDefaults(defineProps<{
   modelValue?: string
@@ -54,6 +55,8 @@ function initEditor() {
       mainMenuBar: true,
       navigationBar: true,
       statusBar: true,
+      onRenderMenu: (items: MenuItem[]) => translateEditorMenu(items),
+      onRenderContextMenu: (items: ContextMenuItem[]) => translateEditorMenu(items as any),
     },
   })
 }
