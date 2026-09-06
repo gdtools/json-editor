@@ -15,6 +15,7 @@ A lightweight, cross-platform desktop JSON editor built with Tauri, Vue 3, and [
 
 - **Dual-pane editor** — Side-by-side JSON editing with a draggable split divider and copy buttons (Left → Right / Right → Left)
 - **Three view modes per pane** — Text, Tree, and Table mode, independently switchable for each pane
+- **Bilingual UI (Chinese / English)** — Switch interface language with one click, preference is remembered
 - **Dark / Light theme** — Toggle with one click, preference is remembered
 - **Open from file** — Load JSON from local file system
 - **Open from URL** — Load JSON from a web URL by pasting a cURL command (supports headers, method, body) or a plain URL
