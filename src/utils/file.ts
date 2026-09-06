@@ -1,5 +1,5 @@
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
-import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs'
+import { readTextFile, writeTextFile, readDir } from '@tauri-apps/plugin-fs'
 
 const JSON_FILTERS = [
   { name: 'JSON', extensions: ['json'] },
@@ -24,4 +24,23 @@ export async function saveJsonFile(content: string, defaultName = 'untitled.json
   if (!filePath) return null
   await writeTextFile(filePath, content)
   return filePath
+}
+
+export async function listJsonFiles(dirPath: string): Promise<string[]> {
+  try {
+    const entries = await readDir(dirPath)
+    const jsonFiles: string[] = []
+    for (const entry of entries) {
+      if (entry.isDirectory) {
+        continue
+      }
+      if (entry.name.toLowerCase().endsWith('.json')) {
+        jsonFiles.push(entry.name)
+      }
+    }
+    return jsonFiles.sort()
+  } catch (e) {
+    console.error('Failed to list directory:', e)
+    return []
+  }
 }

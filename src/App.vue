@@ -130,6 +130,8 @@ async function loadFileFromPath(rawPath: string) {
     const content = await readTextFile(path)
     leftContent.value = content
     fileName.value = path.split(/[\\/]/).pop() || 'untitled.json'
+    pushRecentFile(path)
+    await openDirForFile(path)
     // 确保 editor 已初始化并同步内容
     await nextTick()
     leftEditorRef.value?.setText(content)
@@ -212,9 +214,24 @@ async function handleOpen() {
       leftContent.value = result.content
       fileName.value = result.path.split(/[\\/]/).pop() || 'untitled.json'
       fileLoaded = false
+      pushRecentFile(result.path)
+      await openDirForFile(result.path)
     }
   } catch (e) {
     console.error('Failed to open file:', e)
+  }
+}
+
+async function handleOpenRecent(path: string) {
+  try {
+    const content = await readTextFile(path)
+    leftContent.value = content
+    fileName.value = path.split(/[\\/]/).pop() || 'untitled.json'
+    fileLoaded = false
+    pushRecentFile(path)
+    await openDirForFile(path)
+  } catch (e) {
+    console.error('Failed to open recent file:', e)
   }
 }
 
@@ -300,6 +317,87 @@ function copyRightToLeft() {
 // 拖放文件高亮状态（由 Tauri onDragDropEvent 驱动）
 const dragOverLeft = ref(false)
 const dragOverRight = ref(false)
+
+// 最近打开的文件
+const recentFiles = ref<Array<{ name: string; path: string }>>([])
+const RECENT_KEY = 'json-editor-recent-files'
+const MAX_RECENT = 10
+
+function loadRecentFiles() {
+  try {
+    const raw = localStorage.getItem(RECENT_KEY)
+    if (raw) recentFiles.value = JSON.parse(raw)
+  } catch {
+    recentFiles.value = []
+  }
+}
+
+function pushRecentFile(path: string) {
+  const name = path.split(/[\\/]/).pop() || path
+  const list = recentFiles.value.filter(f => f.path !== path)
+  list.unshift({ name, path })
+  if (list.length > MAX_RECENT) list.length = MAX_RECENT
+  recentFiles.value = list
+  try {
+    localStorage.setItem(RECENT_KEY, JSON.stringify(list))
+  } catch {
+    // ignore quota errors
+  }
+}
+
+loadRecentFiles()
+
+// 左侧文件夹浏览器
+const currentDir = ref('')
+const dirFiles = ref<string[]>([])
+const dirLoading = ref(false)
+
+async function openDirForFile(filePath: string) {
+  const dir = filePath.replace(/[\\/][^\\/]*$/, '') || filePath
+  await loadDirFiles(dir)
+}
+
+async function loadDirFiles(dirPath: string) {
+  if (!dirPath || dirPath === currentDir.value) return
+  dirLoading.value = true
+  try {
+    const { listJsonFiles } = await import('./utils/file')
+    const files = await listJsonFiles(dirPath)
+    dirFiles.value = files
+    currentDir.value = dirPath
+  } catch (e) {
+    console.error('Failed to load directory:', e)
+    dirFiles.value = []
+  } finally {
+    dirLoading.value = false
+  }
+}
+
+async function handleOpenFileFromFolder(fName: string) {
+  if (!currentDir.value) return
+  const fullPath = currentDir.value.replace(/[\\/]$/, '') + '/' + fName
+  try {
+    const content = await readTextFile(fullPath)
+    leftContent.value = content
+    fileName.value = fName
+    pushRecentFile(fullPath)
+  } catch (e) {
+    console.error('Failed to open file from folder:', e)
+  }
+}
+
+async function handleSaveAs() {
+  try {
+    const path = await saveJsonFile(leftContent.value, fileName.value)
+    if (path) {
+      fileName.value = path.split(/[\\/]/).pop() || fileName.value
+      pushRecentFile(path)
+      await openDirForFile(path)
+    }
+  } catch (e) {
+    console.error('Failed to save as:', e)
+  }
+}
 </script>
 
 <template>
@@ -308,10 +406,13 @@ const dragOverRight = ref(false)
       :mode="leftMode"
       :theme="theme"
       :file-name="fileName"
+      :recent-files="recentFiles"
       @new="handleNew"
       @open="handleOpen"
+      @open-recent="handleOpenRecent"
       @open-url="handleOpenUrl"
       @save="handleSave"
+      @save-as="handleSaveAs"
       @copy="handleCopy"
       @format="handleFormat"
       @compact="handleCompact"
@@ -321,7 +422,27 @@ const dragOverRight = ref(false)
       @toggle-theme="handleToggleTheme"
       @update:mode="(m) => { leftMode = m; rightMode = m }"
     />
-    <div class="editor-split">
+    <div class="app-body">
+      <div class="folder-panel" v-if="currentDir">
+        <div class="folder-header">{{ t('folder.title') }}</div>
+        <div class="folder-list">
+          <div v-if="dirLoading" class="folder-empty">{{ t('folder.loading') }}</div>
+          <div v-else-if="dirFiles.length === 0" class="folder-empty">{{ t('folder.empty') }}</div>
+          <div
+            v-for="f in dirFiles"
+            :key="f"
+            class="folder-item"
+            :class="{ active: f === fileName }"
+            @click="handleOpenFileFromFolder(f)"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="folder-icon">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+            </svg>
+            <span class="folder-item-name">{{ f }}</span>
+          </div>
+        </div>
+      </div>
+      <div class="editor-split">
       <div
         class="editor-section"
         :class="{ 'drag-over': dragOverLeft }"
@@ -393,6 +514,7 @@ const dragOverRight = ref(false)
       @close="showOpenUrlModal = false"
       @load="handleUrlLoaded"
     />
+    </div>
   </div>
 </template>
 
@@ -444,6 +566,78 @@ body {
   flex-direction: column;
   height: 100vh;
   background: var(--bg-color);
+}
+
+.app-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.folder-panel {
+  width: 180px;
+  flex-shrink: 0;
+  background: var(--panel-header-bg);
+  border-right: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.folder-header {
+  padding: 8px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.folder-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.folder-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-color);
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+
+.folder-item:hover {
+  background: var(--btn-hover-bg);
+}
+
+.folder-item.active {
+  background: var(--btn-active-bg);
+  color: var(--accent-color, #3b82f6);
+}
+
+.folder-icon {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.folder-item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.folder-empty {
+  padding: 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: center;
 }
 
 .editor-split {

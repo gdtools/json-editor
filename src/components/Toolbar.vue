@@ -7,13 +7,16 @@ defineProps<{
   mode: EditorMode
   theme: ThemeMode
   fileName: string
+  recentFiles?: Array<{ name: string; path: string }>
 }>()
 
 const emit = defineEmits<{
   new: []
   open: []
+  openRecent: [path: string]
   openUrl: []
   save: []
+  saveAs: []
   copy: []
   format: []
   compact: []
@@ -100,6 +103,25 @@ onUnmounted(() => {
             <span>{{ t('toolbar.openUrl') }}</span>
             <span class="shortcut-hint">{{ modKey }}{{ shiftKey }}O</span>
           </button>
+          <div v-if="(recentFiles && recentFiles.length) || false" class="dropdown-separator"></div>
+          <template v-if="recentFiles && recentFiles.length">
+            <div class="dropdown-section-title">{{ t('toolbar.recentFiles') }}</div>
+            <button
+              v-for="(file, idx) in recentFiles"
+              :key="idx"
+              class="dropdown-item dropdown-recent"
+              :title="file.path"
+              @click="() => { closeOpenMenu(); emit('openRecent', file.path) }"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+              </svg>
+              <span class="recent-file-info">
+                <span class="recent-file-name">{{ file.name }}</span>
+                <span class="recent-file-path">{{ file.path }}</span>
+              </span>
+            </button>
+          </template>
         </div>
       </div>
       <button class="btn btn-icon" :title="`${t('toolbar.save')} (${modKey}S)`" @click="emit('save')">
@@ -109,6 +131,16 @@ onUnmounted(() => {
           <polyline points="7 3 7 8 15 8" />
         </svg>
         <span>{{ t('toolbar.save') }}</span>
+      </button>
+      <button class="btn btn-icon" :title="t('toolbar.saveAs')" @click="emit('saveAs')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M17 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9l5 5v11a2 2 0 0 1-2 2z" />
+          <polyline points="17 21 17 13 7 13 7 21" />
+          <polyline points="7 3 7 8 15 8" />
+          <line x1="12" y1="12" x2="12" y2="18" />
+          <line x1="9" y1="15" x2="15" y2="15" />
+        </svg>
+        <span>{{ t('toolbar.saveAs') }}</span>
       </button>
       <button class="btn btn-icon" :title="t('toolbar.copy')" @click="emit('copy')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -362,6 +394,53 @@ onUnmounted(() => {
 
 .dropdown-item:hover {
   background: var(--btn-hover-bg, #f3f4f6);
+}
+
+.dropdown-separator {
+  height: 1px;
+  background: var(--border-color, #e5e7eb);
+  margin: 4px 8px;
+}
+
+.dropdown-section-title {
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--text-secondary, #999);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.dropdown-recent {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 6px 12px;
+}
+
+.recent-file-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.recent-file-name {
+  font-size: 13px;
+  color: var(--text-color, #1a1a1a);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-file-path {
+  font-size: 11px;
+  color: var(--text-secondary, #999);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .shortcut-hint {
