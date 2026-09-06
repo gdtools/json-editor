@@ -25,6 +25,8 @@ const fileName = ref('untitled.json')
 const leftEditorRef = ref<InstanceType<typeof JsonEditorPanel>>()
 const rightEditorRef = ref<InstanceType<typeof JsonEditorPanel>>()
 const showOpenUrlModal = ref(false)
+const leftSelectionType = ref<'array' | 'object' | 'none'>('none')
+const rightSelectionType = ref<'array' | 'object' | 'none'>('none')
 
 const unlistenFns: (() => void)[] = []
 
@@ -307,11 +309,35 @@ function handleToggleTheme() {
 }
 
 function copyLeftToRight() {
-  rightContent.value = leftContent.value
+  const selType = leftEditorRef.value?.getSelectedType()
+  if (selType === 'array' || selType === 'object') {
+    const value = leftEditorRef.value?.getSelectedValue()
+    rightContent.value = JSON.stringify(value, null, 2)
+  } else {
+    rightContent.value = leftContent.value
+  }
 }
 
 function copyRightToLeft() {
-  leftContent.value = rightContent.value
+  const selType = rightEditorRef.value?.getSelectedType()
+  if (selType === 'array' || selType === 'object') {
+    const value = rightEditorRef.value?.getSelectedValue()
+    leftContent.value = JSON.stringify(value, null, 2)
+  } else {
+    leftContent.value = rightContent.value
+  }
+}
+
+function getCopyLeftTitle(): string {
+  if (leftSelectionType.value === 'array') return 'Copy Left Array → Right'
+  if (leftSelectionType.value === 'object') return 'Copy Left Object → Right'
+  return 'Copy Left → Right'
+}
+
+function getCopyRightTitle(): string {
+  if (rightSelectionType.value === 'array') return 'Copy Right Array → Left'
+  if (rightSelectionType.value === 'object') return 'Copy Right Object → Left'
+  return 'Copy Right → Left'
 }
 
 // 拖放文件高亮状态（由 Tauri onDragDropEvent 驱动）
@@ -463,16 +489,25 @@ async function handleSaveAs() {
           :theme="theme"
           label="left"
           class="editor-wrapper"
+          @selection-change="(t) => leftSelectionType = t"
         />
       </div>
       <div class="split-divider">
         <div class="split-actions">
-          <button class="split-btn" title="Copy Left → Right" @click="copyLeftToRight">
+          <button
+            class="split-btn"
+            :title="getCopyLeftTitle()"
+            @click="copyLeftToRight"
+          >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="9 18 15 12 9 6" />
             </svg>
           </button>
-          <button class="split-btn" title="Copy Right → Left" @click="copyRightToLeft">
+          <button
+            class="split-btn"
+            :title="getCopyRightTitle()"
+            @click="copyRightToLeft"
+          >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="15 18 9 12 15 6" />
             </svg>
@@ -502,6 +537,7 @@ async function handleSaveAs() {
           :theme="theme"
           label="right"
           class="editor-wrapper"
+          @selection-change="(t) => rightSelectionType = t"
         />
       </div>
     </div>

@@ -42,3 +42,22 @@ export function countJsonNodes(text: string): number {
   traverse(result.data)
   return count
 }
+
+export function getValueByPath(obj: unknown, path: (string | number)[]): unknown {
+  let current = obj
+  for (const key of path) {
+    if (current === null || current === undefined) return undefined
+    if (typeof current === 'object') {
+      current = (current as Record<string | number, unknown>)[key]
+    } else {
+      return undefined
+    }
+  }
+  return current
+}
+
+export function getValueType(value: unknown): 'array' | 'object' | 'none' {
+  if (Array.isArray(value)) return 'array'
+  if (value !== null && typeof value === 'object') return 'object'
+  return 'none'
+}

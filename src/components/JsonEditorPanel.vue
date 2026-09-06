@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, watch, shallowRef } from 'vue'
-import { createJSONEditor, isJSONContent, isTextContent, Mode, type MenuItem, type ContextMenuItem } from 'vanilla-jsoneditor'
+import { createJSONEditor, isJSONContent, isTextContent, Mode, type MenuItem, type ContextMenuItem, type JSONEditorSelection } from 'vanilla-jsoneditor'
 import type { EditorMode, ThemeMode } from '../types'
-import { tryParseJson } from '../utils/json'
+import { tryParseJson, getValueByPath, getValueType } from '../utils/json'
 import { translateEditorMenu } from '../i18n'
 
 const props = withDefaults(defineProps<{
@@ -20,10 +20,12 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   'update:modelValue': [value: string]
   'update:mode': [value: EditorMode]
+  'selection-change': [type: 'array' | 'object' | 'none']
 }>()
 
 const containerRef = ref<HTMLDivElement>()
 const editor = shallowRef<ReturnType<typeof createJSONEditor> | null>(null)
+const currentSelection = shallowRef<JSONEditorSelection | undefined>(undefined)
 
 function buildContent(): { json: unknown } | { text: string } {
   const result = tryParseJson(props.modelValue)
@@ -57,6 +59,10 @@ function initEditor() {
       statusBar: true,
       onRenderMenu: (items: MenuItem[]) => translateEditorMenu(items),
       onRenderContextMenu: (items: ContextMenuItem[]) => translateEditorMenu(items as any),
+      onSelect: (selection: JSONEditorSelection | undefined) => {
+        currentSelection.value = selection
+        emit('selection-change', getSelectedType())
+      },
     },
   })
 }
@@ -140,11 +146,32 @@ function get(): unknown {
   return null
 }
 
+function getSelectedType(): 'array' | 'object' | 'none' {
+  const sel = currentSelection.value
+  if (!sel || sel.type === 'text') return 'none'
+  const path = (sel as any).path as (string | number)[] | undefined
+  if (!path || path.length === 0) return 'none'
+  const content = editor.value?.get()
+  if (!isJSONContent(content)) return 'none'
+  const value = getValueByPath(content.json, path)
+  return getValueType(value)
+}
+
+function getSelectedValue(): unknown {
+  const sel = currentSelection.value
+  if (!sel || sel.type === 'text') return undefined
+  const path = (sel as any).path as (string | number)[] | undefined
+  if (!path || path.length === 0) return undefined
+  const content = editor.value?.get()
+  if (!isJSONContent(content)) return undefined
+  return getValueByPath(content.json, path)
+}
+
 function set(json: unknown) {
   editor.value?.set({ json })
 }
 
-defineExpose({ setMode, expandAll: expandAllNodes, collapseAll: collapseAllNodes, format, compact, focus, getText, setText, get, set })
+defineExpose({ setMode, expandAll: expandAllNodes, collapseAll: collapseAllNodes, format, compact, focus, getText, setText, get, set, getSelectedType, getSelectedValue })
 
 watch(() => props.modelValue, (newVal) => {
   if (!editor.value) return
