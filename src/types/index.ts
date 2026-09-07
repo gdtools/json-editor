@@ -14,3 +14,11 @@ export interface StatusInfo {
   isValid: boolean
   error: string | null
 }
+
+/** A button of the generic confirm dialog. */
+export interface DialogButton {
+  key: string
+  label: string
+  primary?: boolean
+  danger?: boolean
+}

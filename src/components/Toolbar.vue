@@ -33,6 +33,15 @@ const showAbout = ref(false)
 
 const PROJECT_URL = 'https://github.com/yaoxinghuo/json-editor'
 
+/** Directory part of a path, kept in sync with App.vue's helper. */
+function getFileDir(filePath: string): string {
+  const lastSep = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'))
+  if (lastSep <= 0) return ''
+  let dir = filePath.substring(0, lastSep)
+  if (/^[A-Za-z]:$/.test(dir)) dir = dir + '\\'
+  return dir
+}
+
 // macOS 用 ⌘/⇧ 符号，其他平台用 Ctrl/Shift
 const isMac = navigator.userAgent.includes('Mac')
 const modKey = isMac ? '⌘' : 'Ctrl'
@@ -113,13 +122,8 @@ onUnmounted(() => {
               :title="file.path"
               @click="() => { closeOpenMenu(); emit('openRecent', file.path) }"
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-              </svg>
-              <span class="recent-file-info">
-                <span class="recent-file-name">{{ file.name }}</span>
-                <span class="recent-file-path">{{ file.path }}</span>
-              </span>
+              <span class="recent-file-name">{{ file.name }}</span>
+              <span class="recent-file-path">{{ getFileDir(file.path) || file.path }}</span>
             </button>
           </template>
         </div>
@@ -412,35 +416,29 @@ onUnmounted(() => {
 }
 
 .dropdown-recent {
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
+  gap: 10px;
   padding: 6px 12px;
-}
-
-.recent-file-info {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-  flex: 1;
 }
 
 .recent-file-name {
   font-size: 13px;
   color: var(--text-color, #1a1a1a);
   font-weight: 500;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  max-width: 150px;
+  flex-shrink: 0;
 }
 
 .recent-file-path {
   font-size: 11px;
   color: var(--text-secondary, #999);
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
 }
 
 .shortcut-hint {

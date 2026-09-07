@@ -79,6 +79,27 @@ export const messages: Record<Lang, Dict> = {
     'toast.saved': '已保存',
     'toast.saveFailed': '保存失败',
     'toast.copied': '路径已复制',
+    'dialog.unsaved.title': '尚未保存',
+    'dialog.unsaved.message': '是否保存对「{name}」的修改？',
+    'dialog.save': '保存',
+    'dialog.discard': '不保存',
+    'dialog.cancel': '取消',
+    'file.rename': '重命名',
+    'file.delete': '删除',
+    'file.reveal': '在文件管理器中显示',
+    'file.open': '打开',
+    'file.rename.title': '重命名',
+    'file.rename.placeholder': '新文件名',
+    'file.rename.empty': '文件名不能为空',
+    'file.rename.failed': '重命名失败',
+    'file.delete.title': '删除文件',
+    'file.delete.confirm': '确定要删除「{name}」吗？此操作不可撤销。',
+    'file.delete.failed': '删除失败',
+    'file.deleted': '已删除',
+    'sidebar.collapse': '收起侧边栏',
+    'sidebar.expand': '展开侧边栏',
+    'sidebar.recentFiles': '最近打开',
+    'sidebar.folder': '当前文件夹',
   },
   'en-US': {
     'toolbar.new': 'New',
@@ -125,12 +146,37 @@ export const messages: Record<Lang, Dict> = {
     'toast.saved': 'Saved',
     'toast.saveFailed': 'Save failed',
     'toast.copied': 'Path copied',
+    'dialog.unsaved.title': 'Unsaved Changes',
+    'dialog.unsaved.message': 'Do you want to save changes to "{name}"?',
+    'dialog.save': 'Save',
+    'dialog.discard': "Don't Save",
+    'dialog.cancel': 'Cancel',
+    'file.rename': 'Rename',
+    'file.delete': 'Delete',
+    'file.reveal': 'Reveal in File Manager',
+    'file.open': 'Open',
+    'file.rename.title': 'Rename',
+    'file.rename.placeholder': 'New file name',
+    'file.rename.empty': 'File name cannot be empty',
+    'file.rename.failed': 'Rename failed',
+    'file.delete.title': 'Delete File',
+    'file.delete.confirm': 'Delete "{name}"? This cannot be undone.',
+    'file.delete.failed': 'Delete failed',
+    'file.deleted': 'Deleted',
+    'sidebar.collapse': 'Collapse sidebar',
+    'sidebar.expand': 'Expand sidebar',
+    'sidebar.recentFiles': 'Recent Files',
+    'sidebar.folder': 'Current Folder',
   },
 }
 
-export function t(key: string): string {
+export function t(key: string, params?: Record<string, string | number>): string {
   const dict = messages[lang.value]
-  return dict[key] ?? key
+  const raw = dict[key] ?? key
+  if (!params) return raw
+  return raw.replace(/\{(\w+)\}/g, (match, name: string) =>
+    Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : match,
+  )
 }
 
 export function toggleLang() {
