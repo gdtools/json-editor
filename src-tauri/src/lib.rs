@@ -100,11 +100,20 @@ pub fn run() {
             let app_handle = app.handle().clone();
             app.on_menu_event(move |app, event| {
                 use tauri::Emitter;
+                // Prefer emitting on the window: that is the most reliable channel,
+                // and the global `app.emit` is used as a fallback.
+                let emit = |name: &str| {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.emit(name, ());
+                    } else {
+                        let _ = app_handle.emit(name, ());
+                    }
+                };
                 match event.id().0.as_str() {
-                    "new" => { let _ = app_handle.emit("menu:new", ()); }
-                    "open" => { let _ = app_handle.emit("menu:open", ()); }
-                    "open_url" => { let _ = app_handle.emit("menu:open_url", ()); }
-                    "save" => { let _ = app_handle.emit("menu:save", ()); }
+                    "new" => emit("menu:new"),
+                    "open" => emit("menu:open"),
+                    "open_url" => emit("menu:open_url"),
+                    "save" => emit("menu:save"),
                     "minimize" => {
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.minimize();

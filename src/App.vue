@@ -146,6 +146,11 @@ async function openDirForFile(filePath: string) {
   }
 }
 
+async function refreshCurrentDir() {
+  if (!currentDir.value) return
+  await loadDirFiles(currentDir.value)
+}
+
 async function handleOpenFileFromFolder(fName: string) {
   if (!currentDir.value) return
   const fullPath = currentDir.value.replace(/[\\/]$/, '') + '/' + fName
@@ -188,6 +193,7 @@ async function openFileInTab(path: string, content?: string) {
   leftTabs.value.push(tab)
   activeLeftTabId.value = tab.id
   pushRecentFile(path)
+  await openDirForFile(path)
 }
 
 function closeTab(id: string) {
@@ -249,9 +255,10 @@ async function handleSave() {
       tab.dirty = false
       pushRecentFile(tab.path)
       await openDirForFile(tab.path)
+      showToast(t('toast.saved'))
     } catch (e) {
       console.error('Failed to save file:', e)
-      alert('保存失败：' + (e instanceof Error ? e.message : String(e)))
+      showToast(t('toast.saveFailed') + '：' + (e instanceof Error ? e.message : String(e)))
     }
     return
   }
@@ -263,6 +270,7 @@ async function handleSave() {
     tab.dirty = false
     pushRecentFile(path)
     await openDirForFile(path)
+    showToast(t('toast.saved'))
   }
 }
 
@@ -525,17 +533,37 @@ async function setupFileAssociation() {
 // Menu shortcuts
 // ---------------------------------------------------------------------------
 async function setupMenuShortcuts() {
+  const handlers: Record<string, () => void> = {
+    'menu:new': handleNew,
+    'menu:open': handleOpen,
+    'menu:open_url': handleOpenUrl,
+    'menu:save': handleSave,
+  }
+  for (const [eventName, handler] of Object.entries(handlers)) {
+    // The Tauri IPC bridge may not be ready during onMounted; retry once so a
+    // failed registration is never silently swallowed.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const unlisten = await listen(eventName, () => handler())
+        unlistenFns.push(unlisten)
+        break
+      } catch (e) {
+        if (attempt === 2) {
+          console.warn('[menu] listen failed:', eventName, e)
+        } else {
+          await new Promise(resolve => setTimeout(resolve, 400))
+        }
+      }
+    }
+  }
+}
+
+async function setupFocusRefresh() {
   try {
-    const handlers: Record<string, () => void> = {
-      'menu:new': handleNew,
-      'menu:open': handleOpen,
-      'menu:open_url': handleOpenUrl,
-      'menu:save': handleSave,
-    }
-    for (const [eventName, handler] of Object.entries(handlers)) {
-      const unlisten = await listen(eventName, () => handler())
-      unlistenFns.push(unlisten)
-    }
+    const unlisten = await listen('tauri://focus', () => {
+      refreshCurrentDir()
+    })
+    unlistenFns.push(unlisten)
   } catch (e) {
     // non-Tauri env
   }
@@ -579,13 +607,33 @@ const rightValidation = computed(() => validateJson(rightDraft.value))
 const rightNodeCount = computed(() => countJsonNodes(rightDraft.value))
 
 // ---------------------------------------------------------------------------
+// Toast
+// ---------------------------------------------------------------------------
+const toastMessage = ref('')
+let toastTimer: number | undefined
+
+function showToast(msg: string) {
+  toastMessage.value = msg
+  if (toastTimer) window.clearTimeout(toastTimer)
+  toastTimer = window.setTimeout(() => {
+    toastMessage.value = ''
+  }, 1600)
+}
+
+// ---------------------------------------------------------------------------
 // Keyboard shortcuts
 // ---------------------------------------------------------------------------
+// Registered on `window` in the CAPTURE phase: the vanilla-jsoneditor inner
+// handlers (and Tauri's native menu accelerator) would otherwise swallow the
+// event before it reaches `document` in the bubble phase.
 function onKeyDown(e: KeyboardEvent) {
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
-    e.preventDefault()
-    handleSave()
-  }
+  if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return
+  const isS = e.key === 's' || e.key === 'S' || e.code === 'KeyS'
+  if (!isS) return
+  e.preventDefault()
+  e.stopPropagation()
+  if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation()
+  void handleSave()
 }
 
 // ---------------------------------------------------------------------------
@@ -595,13 +643,15 @@ onMounted(() => {
   document.documentElement.setAttribute('data-theme', theme.value)
   setupFileAssociation()
   setupMenuShortcuts()
+  setupFocusRefresh()
   setupDragDrop()
-  document.addEventListener('keydown', onKeyDown)
+  window.addEventListener('keydown', onKeyDown, true)
 })
 
 onBeforeUnmount(() => {
   unlistenFns.forEach(fn => fn())
-  document.removeEventListener('keydown', onKeyDown)
+  window.removeEventListener('keydown', onKeyDown, true)
+  if (toastTimer) window.clearTimeout(toastTimer)
 })
 </script>
 
@@ -649,7 +699,19 @@ onBeforeUnmount(() => {
             </div>
           </template>
           <template v-else>
-            <div class="folder-header">{{ currentDir || t('folder.tempFile') }}</div>
+            <div class="folder-header">
+              <span class="folder-header-text">{{ currentDir || t('folder.tempFile') }}</span>
+              <button
+                v-if="currentDir"
+                class="folder-refresh"
+                @click="refreshCurrentDir"
+                :title="t('folder.refresh')"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                </svg>
+              </button>
+            </div>
             <div class="folder-list">
               <div v-if="dirLoading" class="folder-empty">{{ t('folder.loading') }}</div>
               <div v-else-if="dirFiles.length === 0" class="folder-empty">{{ t('folder.empty') }}</div>
@@ -684,8 +746,12 @@ onBeforeUnmount(() => {
               :style="{ flex: `0 0 calc(${splitRatio * 100}% - ${splitRatio * 40}px)` }"
             >
               <template v-if="leftTabs.length > 0">
-                <div class="panel-header">
-                  <span class="panel-title">{{ fileName }}</span>
+                <div class="panel-header panel-header-file">
+                  <div class="panel-title-group">
+                    <span class="panel-title">{{ fileName }}<span v-if="activeTab && activeTab.dirty" class="title-dirty">(*)</span></span>
+                    <span v-if="activeTab && activeTab.path" class="panel-path" :title="activeTab.path">{{ activeTab.path }}</span>
+                    <span v-else class="panel-path panel-path-empty">{{ t('folder.tempFile') }}</span>
+                  </div>
                   <div class="panel-status">
                     <span v-if="leftValidation.valid" class="status-ok">✓ {{ t('panel.valid') }}</span>
                     <span v-else class="status-err">✗ {{ t('panel.invalid') }}</span>
@@ -764,6 +830,7 @@ onBeforeUnmount(() => {
         @load="handleUrlLoaded"
       />
     </div>
+    <div v-if="toastMessage" class="toast">{{ toastMessage }}</div>
   </div>
 </template>
 
@@ -957,6 +1024,45 @@ body {
   flex-shrink: 0;
 }
 
+.panel-header-file {
+  height: 44px;
+}
+
+.panel-title-group {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.panel-title-group .panel-title {
+  flex: none;
+  max-width: 100%;
+}
+
+.title-dirty {
+  color: #ef4444;
+  font-weight: 600;
+  margin-left: 2px;
+}
+
+.panel-path {
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.panel-path-empty {
+  opacity: 0.65;
+  font-style: italic;
+}
+
 .panel-title {
   font-size: 12px;
   color: var(--text-secondary);
@@ -966,6 +1072,25 @@ body {
   white-space: nowrap;
   flex: 1;
   min-width: 0;
+}
+
+.toast {
+  position: fixed;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 18px;
+  border-radius: 6px;
+  background: rgba(17, 24, 39, 0.92);
+  color: #ffffff;
+  font-size: 13px;
+  z-index: 10000;
+  pointer-events: none;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  max-width: 60vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .panel-status {
@@ -1146,6 +1271,9 @@ body {
 }
 
 .folder-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   padding: 6px 12px;
   font-size: 11px;
   font-weight: 600;
@@ -1154,6 +1282,33 @@ body {
   letter-spacing: 0.5px;
   border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
+}
+
+.folder-header-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.folder-refresh {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+
+.folder-refresh:hover {
+  background: var(--btn-hover-bg);
+  color: var(--text-color);
 }
 
 .folder-list {
