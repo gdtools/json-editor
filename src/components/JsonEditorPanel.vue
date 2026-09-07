@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, watch, shallowRef } from 'vue'
-import { createJSONEditor, isJSONContent, isTextContent, Mode, stringifyJSONPath, type MenuItem, type ContextMenuItem, type JSONEditorSelection } from 'vanilla-jsoneditor'
+import { createJSONEditor, isJSONContent, isTextContent, Mode, stringifyJSONPath, getFocusPath, type MenuItem, type ContextMenuItem, type JSONEditorSelection } from 'vanilla-jsoneditor'
 import type { EditorMode, ThemeMode } from '../types'
 import { tryParseJson, getValueByPath, getValueType } from '../utils/json'
 import { translateEditorMenu, t } from '../i18n'
@@ -21,6 +21,7 @@ const emit = defineEmits<{
   'update:modelValue': [value: string]
   'update:mode': [value: EditorMode]
   'selection-change': [type: 'array' | 'object' | 'none']
+  'copied': [text: string]
 }>()
 
 const containerRef = ref<HTMLDivElement>()
@@ -31,36 +32,75 @@ const currentSelection = shallowRef<JSONEditorSelection | undefined>(undefined)
 // Navigation bar context menu: right-click a breadcrumb segment -> copy JSON path
 // ---------------------------------------------------------------------------
 const navMenu = ref({ visible: false, x: 0, y: 0, path: '' })
+const navCopied = ref(false)
 
+/** Authoritative path of the current selection (handles multi-selection too). */
 function getSelectionPathArray(): (string | number)[] | null {
-  const sel = currentSelection.value as unknown as { type?: string; path?: unknown }
+  const sel = currentSelection.value as unknown as { type?: string; path?: unknown } | undefined
   if (!sel || sel.type === 'text') return null
-  const p = sel.path
-  if (!Array.isArray(p)) return null
-  return p as (string | number)[]
+  try {
+    const p = getFocusPath(sel as never)
+    if (Array.isArray(p)) return p as (string | number)[]
+  } catch {
+    // fall through to the raw path below
+  }
+  const raw = sel.path
+  return Array.isArray(raw) ? (raw as (string | number)[]) : null
 }
 
-// The navigation bar renders one `.jse-navigation-bar-item` per level:
-// item k represents the JSON path `selection.path.slice(0, k)`.
-function onContainerContextMenu(e: MouseEvent) {
-  const target = e.target as HTMLElement | null
-  if (!target) return
-  const item = target.closest('.jse-navigation-bar-item') as HTMLElement | null
-  if (!item) return
+/**
+ * The navigation bar renders one `.jse-navigation-bar-item` per path segment.
+ * Item k carries the label `path[k]` and represents the node `path.slice(0, k+1)`
+ * (the trailing item, rendered only for objects/arrays, has no label).
+ */
+function navPathFor(item: HTMLElement): string | null {
   const bar = item.closest('.jse-navigation-bar')
-  if (!bar) return
-  const items = Array.from(bar.querySelectorAll('.jse-navigation-bar-item'))
+  if (!bar) return null
+  const items = Array.from(bar.querySelectorAll<HTMLElement>('.jse-navigation-bar-item'))
   const idx = items.indexOf(item)
-  if (idx < 0) return
-  const full = getSelectionPathArray()
-  if (!full) return
+  if (idx < 0) return null
+
+  const segs = getSelectionPathArray()
+  if (segs) {
+    const end = Math.max(0, Math.min(idx + 1, segs.length))
+    return stringifyJSONPath(segs.slice(0, end) as never)
+  }
+
+  // Fallback: rebuild the path from the breadcrumb labels
+  const rebuilt: (string | number)[] = []
+  for (let i = 0; i <= idx; i++) {
+    const btn = items[i].querySelector<HTMLElement>(
+      'button.jse-navigation-bar-button:not(.jse-navigation-bar-arrow)'
+    )
+    const label = (btn?.textContent ?? '').trim()
+    if (!label) continue
+    rebuilt.push(/^\d+$/.test(label) ? Number(label) : label)
+  }
+  return stringifyJSONPath(rebuilt as never)
+}
+
+/**
+ * Must run in the CAPTURE phase on window: the editor installs its own
+ * contextmenu handler on the TreeMode root which calls stopPropagation(),
+ * so a listener on our container would never see the event.
+ */
+function onWindowContextMenu(e: MouseEvent) {
+  navCopied.value = false
+  const target = e.target as HTMLElement | null
+  const item = target?.closest?.('.jse-navigation-bar-item') as HTMLElement | null
+  if (!item || !containerRef.value?.contains(item)) {
+    closeNavMenu()
+    return
+  }
+  const path = navPathFor(item)
+  if (!path) return
   e.preventDefault()
   e.stopPropagation()
   navMenu.value = {
     visible: true,
-    x: e.clientX,
-    y: e.clientY,
-    path: stringifyJSONPath(full.slice(0, idx).map(String)),
+    x: Math.min(e.clientX, window.innerWidth - 200),
+    y: Math.min(e.clientY, window.innerHeight - 100),
+    path,
   }
 }
 
@@ -70,7 +110,6 @@ function closeNavMenu() {
 
 async function copyNavPath() {
   const text = navMenu.value.path
-  closeNavMenu()
   try {
     await navigator.clipboard.writeText(text)
   } catch {
@@ -84,6 +123,12 @@ async function copyNavPath() {
     document.execCommand('copy')
     document.body.removeChild(ta)
   }
+  emit('copied', text)
+  navCopied.value = true
+  window.setTimeout(() => {
+    navCopied.value = false
+    closeNavMenu()
+  }, 700)
 }
 
 function buildContent(): { json: unknown } | { text: string } {
@@ -259,22 +304,22 @@ watch(() => props.mode, (newMode) => {
 onMounted(() => {
   initEditor()
   window.addEventListener('click', closeNavMenu)
-  // capture phase so an older menu closes before a new one opens
-  window.addEventListener('contextmenu', closeNavMenu, true)
+  // capture phase: run before the editor's own contextmenu handler
+  window.addEventListener('contextmenu', onWindowContextMenu, true)
   window.addEventListener('blur', closeNavMenu)
 })
 
 onBeforeUnmount(() => {
   destroyEditor()
   window.removeEventListener('click', closeNavMenu)
-  window.removeEventListener('contextmenu', closeNavMenu, true)
+  window.removeEventListener('contextmenu', onWindowContextMenu, true)
   window.removeEventListener('blur', closeNavMenu)
 })
 </script>
 
 <template>
   <div class="json-editor-panel" :class="`theme-${theme}`">
-    <div ref="containerRef" class="json-editor-container" @contextmenu="onContainerContextMenu" />
+    <div ref="containerRef" class="json-editor-container" />
     <Teleport to="body">
       <div
         v-if="navMenu.visible"
@@ -285,11 +330,14 @@ onBeforeUnmount(() => {
       >
         <div class="nav-path-menu-value" :title="navMenu.path">{{ navMenu.path }}</div>
         <button class="nav-path-menu-item" @click="copyNavPath">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <svg v-if="!navCopied" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
             <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
           </svg>
-          <span>{{ t('path.copyPath') }}</span>
+          <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5">
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+          <span>{{ navCopied ? t('toast.copied') : t('path.copyNodePath') }}</span>
         </button>
       </div>
     </Teleport>

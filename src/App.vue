@@ -818,6 +818,10 @@ function showToast(msg: string) {
   }, 1600)
 }
 
+function onNodePathCopied(path: string) {
+  showToast(t('toast.nodePathCopied') + ': ' + path)
+}
+
 // ---------------------------------------------------------------------------
 // Keyboard shortcuts
 // ---------------------------------------------------------------------------
@@ -1006,6 +1010,7 @@ onBeforeUnmount(() => {
                   label="left"
                   class="editor-wrapper"
                   @selection-change="(t) => leftSelectionType = t"
+                  @copied="onNodePathCopied"
                 />
               </template>
               <div v-else class="welcome-pane">
@@ -1064,6 +1069,7 @@ onBeforeUnmount(() => {
                 label="right"
                 class="editor-wrapper"
                 @selection-change="(t) => rightSelectionType = t"
+                @copied="onNodePathCopied"
               />
             </div>
           </div>
