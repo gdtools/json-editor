@@ -16,14 +16,22 @@ A lightweight, cross-platform desktop JSON editor built with Tauri, Vue 3, and [
 ## Features
 
 - **Dual-pane editor** — Side-by-side JSON editing with a draggable split divider and copy buttons (Left → Right / Right → Left)
+- **Multi-tab support** — Open and switch between multiple JSON files in tabs, with unsaved-change indicators and close confirmation
+- **Left sidebar file browser** — Browse and open files from a tree-view sidebar with right-click context menu (rename, delete, etc.)
+- **Recent files** — Quick access to recently opened files from the toolbar
 - **Three view modes per pane** — Text, Tree, and Table mode, independently switchable for each pane
 - **Bilingual UI (Chinese / English)** — Switch interface language with one click, preference is remembered
 - **Dark / Light theme** — Toggle with one click, preference is remembered
 - **Open from file** — Load JSON from local file system
 - **Open from URL** — Load JSON from a web URL by pasting a cURL command (supports headers, method, body) or a plain URL
-- **Save** — Export JSON to a local file
+- **Save / Save As** — Save JSON to the original file or export to a new file
+- **Single-instance mode** — Double-clicking a `.json` file while the app is running opens it in a new tab (or switches to it if already open) instead of launching a second window
+- **Session restore** — Restores your previous session (open tabs, modes, active tab) on startup
+- **Smart copy buttons** — Copy buttons dynamically show "Array" or "Object" based on the current selection type in tree view
 - **JSON utilities** — Format, compact, sort, transform, search, undo/redo (per pane)
 - **Validation & node count** — Real-time JSON validation and node count displayed in each pane header
+- **Auto repair for invalid JSON** — Automatically switches to text mode for invalid JSON to expose vanilla-jsoneditor's built-in "Auto repair" button
+- **Large-file friendly** — Files larger than 1.5 MB open in text mode by default; validation and node counting are debounced for responsiveness
 - **State persistence** — Remembers window position/size, theme, split ratio, editor modes, and editor content across restarts
 
 ## Tech Stack
@@ -82,15 +90,20 @@ JsonEditor/
 │   ├── assets/              # SVG icons (app logo, drag indicator)
 │   ├── components/
 │   │   ├── JsonEditorPanel.vue  # Single JSON editor pane (wraps vanilla-jsoneditor)
-│   │   ├── Toolbar.vue          # Top toolbar (New, Open, Save, Copy, Theme toggle)
+│   │   ├── Toolbar.vue          # Top toolbar (New, Open, Save, Save As, Copy, Theme toggle)
+│   │   ├── TabBar.vue           # Multi-tab bar with close confirmation
+│   │   ├── ConfirmDialog.vue    # Reusable confirmation dialog
 │   │   └── OpenUrlModal.vue     # Modal for loading JSON from URL/cURL
 │   ├── composables/
 │   │   └── usePersistedState.ts # localStorage-backed Vue ref
+│   ├── i18n/
+│   │   └── index.ts             # Chinese/English translations
 │   ├── utils/
 │   │   ├── curl.ts              # cURL command parser
 │   │   ├── file.ts              # File open/save via Tauri dialogs
 │   │   └── json.ts              # JSON validation, formatting, node counting
-│   ├── types.ts                 # Shared TypeScript types
+│   ├── types/
+│   │   └── index.ts             # Shared TypeScript types
 │   ├── App.vue                  # Main app component (layout, state, split pane)
 │   └── main.ts                  # Vue app entry
 ├── src-tauri/
