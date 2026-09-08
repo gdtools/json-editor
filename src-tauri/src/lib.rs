@@ -24,6 +24,94 @@ fn opened_paths(app: tauri::AppHandle) -> Vec<String> {
     paths
 }
 
+// 动态授权前端读取单个文件（用于最近文件、手动打开的文件等）
+#[tauri::command]
+fn allow_file(app: tauri::AppHandle, path: String) {
+    use tauri_plugin_fs::FsExt;
+    let _ = app.fs_scope().allow_file(std::path::Path::new(&path));
+}
+
+// 动态授权前端读取目录（用于左侧文件夹浏览器）
+#[tauri::command]
+fn allow_directory(app: tauri::AppHandle, path: String) {
+    use tauri_plugin_fs::FsExt;
+    let _ = app.fs_scope().allow_directory(std::path::Path::new(&path), true);
+}
+
+// ---------------------------------------------------------------------------
+// Folder browser backend
+// ---------------------------------------------------------------------------
+// The fs plugin's `readDir` does not expose timestamps or sizes, so we list the
+// directory here and return rich metadata sorted by modification time.
+#[derive(serde::Serialize)]
+struct DirJsonFile {
+    name: String,
+    path: String,
+    size: u64,
+    mtime: i64, // seconds since UNIX epoch, 0 when unavailable
+}
+
+fn json_files_in_dir_impl(dir: &str) -> Vec<DirJsonFile> {
+    let mut out: Vec<DirJsonFile> = Vec::new();
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return out,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_json = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("json"))
+            .unwrap_or(false);
+        if !is_json {
+            continue;
+        }
+        let meta = match std::fs::metadata(&path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        out.push(DirJsonFile {
+            name: entry.file_name().to_string_lossy().to_string(),
+            path: path.to_string_lossy().to_string(),
+            size: meta.len(),
+            mtime,
+        });
+    }
+    // Newest first
+    out.sort_by(|a, b| b.mtime.cmp(&a.mtime));
+    out
+}
+
+#[tauri::command]
+fn list_json_files(app: tauri::AppHandle, dir: String) -> Vec<DirJsonFile> {
+    use tauri_plugin_fs::FsExt;
+    let _ = app.fs_scope().allow_directory(std::path::Path::new(&dir), true);
+    json_files_in_dir_impl(&dir)
+}
+
+#[tauri::command]
+fn rename_file(from: String, to: String) -> Result<(), String> {
+    if std::path::Path::new(&to).exists() {
+        return Err("target already exists".into());
+    }
+    std::fs::rename(&from, &to).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_file(path: String) -> Result<(), String> {
+    std::fs::remove_file(&path).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -31,7 +119,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
-        .invoke_handler(tauri::generate_handler![opened_paths])
+        .invoke_handler(tauri::generate_handler![opened_paths, allow_file, allow_directory, list_json_files, rename_file, delete_file])
         .setup(|app| {
             // macOS 自定义菜单：绑定快捷键并通过事件通知前端
             let new_item = MenuItemBuilder::with_id("new", "New")
@@ -86,11 +174,20 @@ pub fn run() {
             let app_handle = app.handle().clone();
             app.on_menu_event(move |app, event| {
                 use tauri::Emitter;
+                // Prefer emitting on the window: that is the most reliable channel,
+                // and the global `app.emit` is used as a fallback.
+                let emit = |name: &str| {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.emit(name, ());
+                    } else {
+                        let _ = app_handle.emit(name, ());
+                    }
+                };
                 match event.id().0.as_str() {
-                    "new" => { let _ = app_handle.emit("menu:new", ()); }
-                    "open" => { let _ = app_handle.emit("menu:open", ()); }
-                    "open_url" => { let _ = app_handle.emit("menu:open_url", ()); }
-                    "save" => { let _ = app_handle.emit("menu:save", ()); }
+                    "new" => emit("menu:new"),
+                    "open" => emit("menu:open"),
+                    "open_url" => emit("menu:open_url"),
+                    "save" => emit("menu:save"),
                     "minimize" => {
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.minimize();
