@@ -83,6 +83,14 @@ const leftMode = computed({
 
 const fileName = computed(() => activeTab.value?.name ?? 'untitled.json')
 
+// Files larger than this are opened in text mode by default, because tree
+// mode builds the entire DOM tree and becomes very sluggish on huge JSON.
+const LARGE_FILE_BYTES = 1.5 * 1024 * 1024
+
+function pickModeForContent(content: string): EditorMode {
+  return content.length > LARGE_FILE_BYTES ? 'text' : 'tree'
+}
+
 // ---------------------------------------------------------------------------
 // Recent files
 // ---------------------------------------------------------------------------
@@ -224,7 +232,16 @@ function setRenameInput(el: unknown) {
     requestAnimationFrame(() => {
       const input = el as HTMLInputElement
       input.focus()
-      input.select()
+      // Select only the base name (excluding the trailing ".json") so the user
+      // can type to rename without accidentally altering the extension.
+      const name = renameValue.value
+      const extLen = name.toLowerCase().endsWith('.json') ? 5 : 0
+      const baseLen = name.length - extLen
+      if (baseLen > 0) {
+        input.setSelectionRange(0, baseLen)
+      } else {
+        input.select()
+      }
     })
   }
 }
@@ -334,7 +351,7 @@ async function openFileInTab(path: string, content?: string) {
     path,
     name,
     content: text,
-    mode: 'tree',
+    mode: pickModeForContent(text),
     dirty: false,
   }
   leftTabs.value.push(tab)
@@ -411,18 +428,21 @@ function switchTab(id: string) {
 // ---------------------------------------------------------------------------
 // Toolbar handlers
 // ---------------------------------------------------------------------------
-async function handleNew() {
-  // 新建一个未保存的 tab（无路径）
+function createNewTab(content = '{}', dirty = true) {
   const tab: EditorTab = {
     id: generateId(),
     path: '',
     name: 'untitled.json',
-    content: '{}',
+    content,
     mode: 'tree',
-    dirty: true,
+    dirty,
   }
   leftTabs.value.push(tab)
   activeLeftTabId.value = tab.id
+}
+
+async function handleNew() {
+  createNewTab('{}', true)
 }
 
 async function handleOpen() {
@@ -493,7 +513,7 @@ function handleUrlLoaded(content: string, name: string) {
     path: '',
     name,
     content,
-    mode: 'tree',
+    mode: pickModeForContent(content),
     dirty: true,
   }
   leftTabs.value.push(tab)
@@ -678,6 +698,8 @@ watch(activeLeftTabId, async (newId) => {
     currentDir.value = ''
     dirFiles.value = []
   }
+  // Recompute validity immediately so the header reflects the switched file
+  recomputeLeftValidation()
 })
 
 // ---------------------------------------------------------------------------
@@ -797,12 +819,37 @@ function startDrag(e: MouseEvent) {
 }
 
 // ---------------------------------------------------------------------------
-// Validation
+// Validation (debounced so large files stay responsive while typing)
 // ---------------------------------------------------------------------------
-const leftValidation = computed(() => validateJson(leftContent.value))
-const leftNodeCount = computed(() => countJsonNodes(leftContent.value))
-const rightValidation = computed(() => validateJson(rightDraft.value))
-const rightNodeCount = computed(() => countJsonNodes(rightDraft.value))
+const leftValidation = ref<{ valid: boolean; error: string | null }>({ valid: true, error: null })
+const leftNodeCount = ref(0)
+const rightValidation = ref<{ valid: boolean; error: string | null }>({ valid: true, error: null })
+const rightNodeCount = ref(0)
+
+function recomputeLeftValidation() {
+  leftValidation.value = validateJson(leftContent.value)
+  leftNodeCount.value = countJsonNodes(leftContent.value)
+}
+
+function recomputeRightValidation() {
+  rightValidation.value = validateJson(rightDraft.value)
+  rightNodeCount.value = countJsonNodes(rightDraft.value)
+}
+
+let leftValidationTimer: number | undefined
+let rightValidationTimer: number | undefined
+
+// Debounce: typing in a big file no longer triggers a full parse + node walk
+// on every keystroke, only once editing settles.
+watch(leftContent, () => {
+  if (leftValidationTimer) window.clearTimeout(leftValidationTimer)
+  leftValidationTimer = window.setTimeout(recomputeLeftValidation, 300)
+}, { flush: 'post' })
+
+watch(rightDraft, () => {
+  if (rightValidationTimer) window.clearTimeout(rightValidationTimer)
+  rightValidationTimer = window.setTimeout(recomputeRightValidation, 300)
+}, { flush: 'post' })
 
 // ---------------------------------------------------------------------------
 // Toast
@@ -839,11 +886,106 @@ function onKeyDown(e: KeyboardEvent) {
 }
 
 // ---------------------------------------------------------------------------
-// Lifecycle
+// Session persistence (restore last editing state on launch)
 // ---------------------------------------------------------------------------
-onMounted(() => {
-  document.documentElement.setAttribute('data-theme', theme.value)
-  setupFileAssociation()
+const SESSION_KEY = 'json-editor-session'
+
+interface SessionTab {
+  id: string
+  path: string
+  name: string
+  content: string
+  mode: EditorMode
+  dirty: boolean
+  reload?: boolean
+}
+
+interface SessionState {
+  tabs: SessionTab[]
+  activeId: string | null
+}
+
+// Persist the open tabs. For files that are saved and unmodified we only store
+// the path (reloaded from disk on launch) so huge files never bloat localStorage.
+function saveSession() {
+  try {
+    const tabs = leftTabs.value.map((t) => {
+      const isCleanFile = !!t.path && !t.dirty
+      return {
+        id: t.id,
+        path: t.path,
+        name: t.name,
+        content: isCleanFile ? '' : t.content,
+        mode: t.mode,
+        dirty: t.dirty,
+        reload: isCleanFile,
+      }
+    })
+    localStorage.setItem(SESSION_KEY, JSON.stringify({ tabs, activeId: activeLeftTabId.value }))
+  } catch {
+    // Quota / serialization errors are non-fatal
+  }
+}
+
+async function restoreSession(): Promise<boolean> {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY)
+    if (!raw) return false
+    const state = JSON.parse(raw) as SessionState
+    if (!state.tabs || state.tabs.length === 0) return false
+    const tabs: EditorTab[] = []
+    for (const st of state.tabs) {
+      let content = st.content
+      let dirty = st.dirty
+      if (st.reload && st.path) {
+        try {
+          content = await readTextFile(st.path)
+          dirty = false
+        } catch {
+          // File moved/deleted: keep the last known content so it can be re-saved
+          content = st.content || '{}'
+        }
+      }
+      if (!content) content = '{}'
+      tabs.push({
+        id: st.id || generateId(),
+        path: st.path,
+        name: st.name || (st.path ? st.path.split(/[\\/]/).pop() || 'untitled.json' : 'untitled.json'),
+        content,
+        mode: st.mode || 'tree',
+        dirty,
+      })
+    }
+    leftTabs.value = tabs
+    const firstId = tabs[0].id
+    activeLeftTabId.value =
+      state.activeId && tabs.some((t) => t.id === state.activeId) ? state.activeId : firstId
+    const active = tabs.find((t) => t.id === activeLeftTabId.value)
+    if (active?.path) await openDirForFile(active.path)
+    return true
+  } catch {
+    return false
+  }
+}
+
+let sessionTimer: number | undefined
+function scheduleSessionSave() {
+  if (sessionTimer) window.clearTimeout(sessionTimer)
+  sessionTimer = window.setTimeout(saveSession, 600)
+}
+
+function initApp() {
+  // 1. Restore the previous session if one was saved
+  void restoreSession().then(async () => {
+    // 2. Process file-association / double-click launch arguments
+    await setupFileAssociation()
+    // 3. If nothing ended up open, start with a fresh new document
+    if (leftTabs.value.length === 0) {
+      createNewTab('{}', false)
+    }
+    recomputeLeftValidation()
+    recomputeRightValidation()
+  })
   setupMenuShortcuts()
   setupFocusRefresh()
   setupDragDrop()
@@ -851,6 +993,24 @@ onMounted(() => {
   window.addEventListener('click', closeFileMenu)
   window.addEventListener('contextmenu', closeFileMenu, true)
   window.addEventListener('blur', closeFileMenu)
+  window.addEventListener('beforeunload', saveSession)
+  window.addEventListener('pagehide', saveSession)
+}
+
+// Debounced session save on structural / dirty / mode changes (not on every
+// keystroke of the content itself, to avoid O(n) work on large files).
+watch(
+  () => leftTabs.value.map((t) => `${t.id}|${t.path}|${t.mode}|${t.dirty ? 1 : 0}`).join(','),
+  scheduleSessionSave
+)
+watch(activeLeftTabId, scheduleSessionSave)
+
+// ---------------------------------------------------------------------------
+// Lifecycle
+// ---------------------------------------------------------------------------
+onMounted(() => {
+  document.documentElement.setAttribute('data-theme', theme.value)
+  initApp()
 })
 
 onBeforeUnmount(() => {
@@ -859,7 +1019,10 @@ onBeforeUnmount(() => {
   window.removeEventListener('click', closeFileMenu)
   window.removeEventListener('contextmenu', closeFileMenu, true)
   window.removeEventListener('blur', closeFileMenu)
+  window.removeEventListener('beforeunload', saveSession)
+  window.removeEventListener('pagehide', saveSession)
   if (toastTimer) window.clearTimeout(toastTimer)
+  if (sessionTimer) window.clearTimeout(sessionTimer)
 })
 </script>
 
@@ -991,11 +1154,7 @@ onBeforeUnmount(() => {
             >
               <template v-if="leftTabs.length > 0">
                 <div class="panel-header panel-header-file">
-                  <div class="panel-title-group">
-                    <span class="panel-title">{{ fileName }}<span v-if="activeTab && activeTab.dirty" class="title-dirty">(*)</span></span>
-                    <span v-if="activeTab && activeTab.path" class="panel-path" :title="activeTab.path">{{ activeTab.path }}</span>
-                    <span v-else class="panel-path panel-path-empty">{{ t('folder.tempFile') }}</span>
-                  </div>
+                  <span class="panel-path" :class="{ 'panel-path-empty': !(activeTab && activeTab.path) }" :title="(activeTab && activeTab.path) ? activeTab.path : t('folder.tempFile')">{{ (activeTab && activeTab.path) ? activeTab.path : t('folder.tempFile') }}</span>
                   <div class="panel-status">
                     <span v-if="leftValidation.valid" class="status-ok">✓ {{ t('panel.valid') }}</span>
                     <span v-else class="status-err">✗ {{ t('panel.invalid') }}</span>
@@ -1379,37 +1538,19 @@ body {
 }
 
 .panel-header-file {
-  height: 44px;
-}
-
-.panel-title-group {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 1px;
-  flex: 1;
-  min-width: 0;
-}
-
-.panel-title-group .panel-title {
-  flex: none;
-  max-width: 100%;
-}
-
-.title-dirty {
-  color: #ef4444;
-  font-weight: 600;
-  margin-left: 2px;
+  height: 32px;
 }
 
 .panel-path {
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.35;
-  color: var(--text-secondary);
+  color: var(--text-color);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 100%;
+  flex: 1;
+  min-width: 0;
 }
 
 .panel-path-empty {
