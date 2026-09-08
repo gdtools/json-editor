@@ -224,7 +224,16 @@ function setRenameInput(el: unknown) {
     requestAnimationFrame(() => {
       const input = el as HTMLInputElement
       input.focus()
-      input.select()
+      // Select only the base name (excluding the trailing ".json") so the user
+      // can type to rename without accidentally altering the extension.
+      const name = renameValue.value
+      const extLen = name.toLowerCase().endsWith('.json') ? 5 : 0
+      const baseLen = name.length - extLen
+      if (baseLen > 0) {
+        input.setSelectionRange(0, baseLen)
+      } else {
+        input.select()
+      }
     })
   }
 }
@@ -991,11 +1000,7 @@ onBeforeUnmount(() => {
             >
               <template v-if="leftTabs.length > 0">
                 <div class="panel-header panel-header-file">
-                  <div class="panel-title-group">
-                    <span class="panel-title">{{ fileName }}<span v-if="activeTab && activeTab.dirty" class="title-dirty">(*)</span></span>
-                    <span v-if="activeTab && activeTab.path" class="panel-path" :title="activeTab.path">{{ activeTab.path }}</span>
-                    <span v-else class="panel-path panel-path-empty">{{ t('folder.tempFile') }}</span>
-                  </div>
+                  <span class="panel-path" :class="{ 'panel-path-empty': !(activeTab && activeTab.path) }" :title="(activeTab && activeTab.path) ? activeTab.path : t('folder.tempFile')">{{ (activeTab && activeTab.path) ? activeTab.path : t('folder.tempFile') }}</span>
                   <div class="panel-status">
                     <span v-if="leftValidation.valid" class="status-ok">✓ {{ t('panel.valid') }}</span>
                     <span v-else class="status-err">✗ {{ t('panel.invalid') }}</span>
@@ -1379,37 +1384,19 @@ body {
 }
 
 .panel-header-file {
-  height: 44px;
-}
-
-.panel-title-group {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 1px;
-  flex: 1;
-  min-width: 0;
-}
-
-.panel-title-group .panel-title {
-  flex: none;
-  max-width: 100%;
-}
-
-.title-dirty {
-  color: #ef4444;
-  font-weight: 600;
-  margin-left: 2px;
+  height: 32px;
 }
 
 .panel-path {
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.35;
-  color: var(--text-secondary);
+  color: var(--text-color);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 100%;
+  flex: 1;
+  min-width: 0;
 }
 
 .panel-path-empty {

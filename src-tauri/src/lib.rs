@@ -119,6 +119,35 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        // Single-instance: a second launch (e.g. double-clicking a .json while
+        // the app is already open) must NOT open a new window. Forward its file
+        // paths to the running instance, which opens them in new tabs.
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            use tauri::Emitter;
+            use tauri_plugin_fs::FsExt;
+            let mut new_paths: Vec<String> = Vec::new();
+            for arg in args.iter().skip(1) {
+                let path = std::path::Path::new(arg);
+                if path.is_file() {
+                    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                        if ext.eq_ignore_ascii_case("json") {
+                            let p = path.to_string_lossy().to_string();
+                            let _ = app.fs_scope().allow_file(path);
+                            new_paths.push(p);
+                        }
+                    }
+                }
+            }
+            // Bring the existing window to the foreground.
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+            if !new_paths.is_empty() {
+                let _ = app.emit("opened", new_paths);
+            }
+        }))
         .invoke_handler(tauri::generate_handler![opened_paths, allow_file, allow_directory, list_json_files, rename_file, delete_file])
         .setup(|app| {
             // macOS 自定义菜单：绑定快捷键并通过事件通知前端
