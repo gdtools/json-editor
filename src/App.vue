@@ -829,11 +829,22 @@ const rightNodeCount = ref(0)
 function recomputeLeftValidation() {
   leftValidation.value = validateJson(leftContent.value)
   leftNodeCount.value = countJsonNodes(leftContent.value)
+  // vanilla-jsoneditor's built-in "Auto repair" button is rendered ONLY in
+  // text mode (it operates on the raw text). The right draft shows it because
+  // it is usually in text mode; the left opens files in tree mode, where the
+  // button never appears. Switch to text mode on invalid JSON so the left gets
+  // the exact same repair affordance the right draft has.
+  if (!leftValidation.value.valid && leftMode.value === 'tree') {
+    leftMode.value = 'text'
+  }
 }
 
 function recomputeRightValidation() {
   rightValidation.value = validateJson(rightDraft.value)
   rightNodeCount.value = countJsonNodes(rightDraft.value)
+  if (!rightValidation.value.valid && rightMode.value === 'tree') {
+    rightMode.value = 'text'
+  }
 }
 
 let leftValidationTimer: number | undefined
