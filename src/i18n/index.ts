@@ -102,6 +102,10 @@ export const messages: Record<Lang, Dict> = {
     'sidebar.expand': '展开侧边栏',
     'sidebar.recentFiles': '最近打开',
     'sidebar.folder': '当前文件夹',
+    'contextMenu.showMarkdown': '显示为 Markdown',
+    'markdown.title': 'Markdown 预览',
+    'markdown.copyRaw': '复制原文',
+    'markdown.close': '关闭',
   },
   'en-US': {
     'toolbar.new': 'New',
@@ -171,6 +175,10 @@ export const messages: Record<Lang, Dict> = {
     'sidebar.expand': 'Expand sidebar',
     'sidebar.recentFiles': 'Recent Files',
     'sidebar.folder': 'Current Folder',
+    'contextMenu.showMarkdown': 'Show Markdown',
+    'markdown.title': 'Markdown Preview',
+    'markdown.copyRaw': 'Copy Raw Text',
+    'markdown.close': 'Close',
   },
 }
 
