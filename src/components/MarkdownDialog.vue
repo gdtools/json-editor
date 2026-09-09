@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import MarkdownIt from 'markdown-it'
+import { createMarkdownRenderer } from '../utils/markdown'
 import { t } from '../i18n'
+import hljsLightCss from 'highlight.js/styles/github.css?inline'
+import hljsDarkCss from 'highlight.js/styles/github-dark.css?inline'
 
 const props = withDefaults(defineProps<{
   visible?: boolean
@@ -17,17 +19,24 @@ const emit = defineEmits<{
   'update:visible': [value: boolean]
 }>()
 
+const md = createMarkdownRenderer()
+
 /**
- * html: false  -> raw HTML in the JSON value is escaped (content is untrusted).
- * linkify: true -> bare URLs become links.
- * breaks: true  -> single newlines become <br>, which suits Windows-style values.
+ * Only one highlight.js theme may be active at a time (both define `.hljs`),
+ * so the active one is injected into <head> and swapped on theme change.
  */
-const md = new MarkdownIt({
-  html: false,
-  linkify: true,
-  breaks: true,
-  typographer: false,
-})
+const HLJS_THEME_ID = 'json-editor-hljs-theme'
+
+function applyHighlightTheme(mode: string) {
+  let el = document.getElementById(HLJS_THEME_ID) as HTMLStyleElement | null
+  if (!el) {
+    el = document.createElement('style')
+    el.id = HLJS_THEME_ID
+    document.head.appendChild(el)
+  }
+  const css = mode === 'dark' ? hljsDarkCss : hljsLightCss
+  if (el.textContent !== css) el.textContent = css
+}
 
 /** JSON string values commonly use Windows CRLF ("\r\n"); normalize to LF. */
 const normalized = computed(() => (props.content ?? '').replace(/\r\n|\r/g, '\n'))
@@ -67,9 +76,10 @@ function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') close()
 }
 
-watch(() => props.visible, (v) => {
+watch([() => props.visible, () => props.theme], ([v, mode]) => {
   if (v) {
     copied.value = false
+    applyHighlightTheme(mode)
     window.addEventListener('keydown', onKeydown)
   } else {
     window.removeEventListener('keydown', onKeydown)
@@ -300,6 +310,24 @@ onBeforeUnmount(() => {
   overflow: auto;
   background: #f6f8fa;
   border-radius: 6px;
+}
+
+.md-body :deep(pre.md-code-block) {
+  border: 1px solid #e8eaed;
+}
+
+.md-dark :deep(pre.md-code-block) {
+  border-color: #3c3c3c;
+}
+
+/* highlight.js themes ship their own background/padding on `.hljs`. The dialog
+   owns the frame, so neutralise it -- `.md-body[data-v] pre code.hljs` is more
+   specific than the injected `.hljs` rule regardless of stylesheet order. */
+.md-body :deep(pre code.hljs) {
+  display: block;
+  overflow-x: auto;
+  padding: 0;
+  background: transparent;
 }
 
 .md-body :deep(code) {
