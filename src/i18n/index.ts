@@ -105,6 +105,8 @@ export const messages: Record<Lang, Dict> = {
     'contextMenu.showMarkdown': '显示为 Markdown',
     'markdown.title': 'Markdown 预览',
     'markdown.copyRaw': '复制原文',
+    'markdown.copyCode': '复制代码',
+    'markdown.plaintext': '纯文本',
     'markdown.close': '关闭',
   },
   'en-US': {
@@ -178,6 +180,8 @@ export const messages: Record<Lang, Dict> = {
     'contextMenu.showMarkdown': 'Show Markdown',
     'markdown.title': 'Markdown Preview',
     'markdown.copyRaw': 'Copy Raw Text',
+    'markdown.copyCode': 'Copy Code',
+    'markdown.plaintext': 'Plain Text',
     'markdown.close': 'Close',
   },
 }

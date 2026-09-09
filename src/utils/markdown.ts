@@ -1,5 +1,6 @@
 import MarkdownIt from 'markdown-it'
 import hljs from 'highlight.js/lib/core'
+import type { LanguageFn } from 'highlight.js'
 
 // Only register the languages we care about: importing the full `highlight.js`
 // bundle would add ~1MB to the app for no benefit here.
@@ -35,7 +36,7 @@ import vbnet from 'highlight.js/lib/languages/vbnet'
 import xml from 'highlight.js/lib/languages/xml'
 import yaml from 'highlight.js/lib/languages/yaml'
 
-const LANGUAGES: Record<string, unknown> = {
+const LANGUAGES: Record<string, LanguageFn> = {
   bash,
   c,
   cpp,
@@ -72,7 +73,14 @@ const LANGUAGES: Record<string, unknown> = {
 for (const [name, definition] of Object.entries(LANGUAGES)) {
   // Each module also brings its own aliases (js/ts/py/sh/golang/...), so
   // ```js and ```javascript resolve to the same grammar.
-  hljs.registerLanguage(name, definition as never)
+  hljs.registerLanguage(name, definition)
+}
+
+export interface MarkdownRendererOptions {
+  /** Label for the per-code-block copy button (i18n, must be already escaped-safe). */
+  copyLabel: string
+  /** Label shown for blocks with no/unknown language. */
+  plainLabel: string
 }
 
 /**
@@ -83,28 +91,45 @@ for (const [name, definition] of Object.entries(LANGUAGES)) {
  * - breaks       -> single newlines become <br>, which suits Windows CRLF values.
  * - highlight    -> fenced/indented code blocks get syntax highlighting.
  */
-export function createMarkdownRenderer() {
-  return new MarkdownIt({
+export function createMarkdownRenderer(options: MarkdownRendererOptions) {
+  const md = new MarkdownIt({
     html: false,
     linkify: true,
     breaks: true,
     typographer: false,
-    highlight: (code: string, lang: string): string => {
-      const language = (lang || '').toLowerCase().trim()
-      let body: string
-
-      if (language && hljs.getLanguage(language)) {
-        // ignoreIllegals keeps half-broken snippets (very common in log values)
-        // from throwing and killing the whole render.
-        body = hljs.highlight(code, { language, ignoreIllegals: true }).value
-      } else {
-        body = escapeHtml(code)
-      }
-
-      const cls = language || 'plaintext'
-      return `<pre class="md-code-block"><code class="hljs language-${escapeHtml(cls)}">${body}</code></pre>`
-    },
   })
+
+  // The `highlight` option can only return a string starting with `<pre`
+  // (otherwise markdown-it wraps it again), which rules out a header row.
+  // Taking over `rules.fence` gives full control over the block markup.
+  md.renderer.rules.fence = (tokens, idx) => {
+    const token = tokens[idx]
+    const info = (token.info || '').trim()
+    // ```json title="x" -> language is the first token only.
+    const language = (info ? info.split(/\s+/)[0] : '').toLowerCase()
+    const known = !!language && !!hljs.getLanguage(language)
+
+    // ignoreIllegals keeps half-broken snippets (very common in log values)
+    // from throwing and killing the whole render.
+    const body = known
+      ? hljs.highlight(token.content, { language, ignoreIllegals: true }).value
+      : escapeHtml(token.content)
+
+    const label = known ? language : options.plainLabel
+    const cls = language || 'plaintext'
+
+    return (
+      `<div class="md-code-wrap">` +
+      `<div class="md-code-head">` +
+      `<span class="md-code-lang">${escapeHtml(label)}</span>` +
+      `<button type="button" class="md-code-copy">${escapeHtml(options.copyLabel)}</button>` +
+      `</div>` +
+      `<pre class="md-code-block"><code class="hljs language-${escapeHtml(cls)}">${body}</code></pre>` +
+      `</div>\n`
+    )
+  }
+
+  return md
 }
 
 function escapeHtml(value: string): string {

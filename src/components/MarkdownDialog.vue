@@ -19,7 +19,13 @@ const emit = defineEmits<{
   'update:visible': [value: boolean]
 }>()
 
-const md = createMarkdownRenderer()
+// Rebuilt when the UI language changes, so the in-block copy buttons relabel.
+const md = computed(() =>
+  createMarkdownRenderer({
+    copyLabel: t('markdown.copyCode'),
+    plainLabel: t('markdown.plaintext'),
+  }),
+)
 
 /**
  * Only one highlight.js theme may be active at a time (both define `.hljs`),
@@ -41,7 +47,7 @@ function applyHighlightTheme(mode: string) {
 /** JSON string values commonly use Windows CRLF ("\r\n"); normalize to LF. */
 const normalized = computed(() => (props.content ?? '').replace(/\r\n|\r/g, '\n'))
 
-const renderedHtml = computed(() => md.render(normalized.value))
+const renderedHtml = computed(() => md.value.render(normalized.value))
 
 const charCount = computed(() => (props.content ?? '').length)
 
@@ -51,24 +57,54 @@ function close() {
   emit('update:visible', false)
 }
 
-async function copyRaw() {
-  const text = normalized.value
+async function writeClipboard(text: string): Promise<boolean> {
   try {
     await navigator.clipboard.writeText(text)
+    return true
   } catch {
     // Fallback when async clipboard access is unavailable
-    const ta = document.createElement('textarea')
-    ta.value = text
-    ta.style.position = 'fixed'
-    ta.style.opacity = '0'
-    document.body.appendChild(ta)
-    ta.select()
-    document.execCommand('copy')
-    document.body.removeChild(ta)
+    try {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.select()
+      const ok = document.execCommand('copy')
+      document.body.removeChild(ta)
+      return ok
+    } catch {
+      return false
+    }
   }
+}
+
+async function copyRaw() {
+  if (!(await writeClipboard(normalized.value))) return
   copied.value = true
   window.setTimeout(() => {
     copied.value = false
+  }, 1200)
+}
+
+/**
+ * Copy buttons live inside v-html output, so they cannot carry Vue handlers --
+ * one delegated listener on the body covers every rendered block.
+ */
+async function onBodyClick(e: MouseEvent) {
+  const target = e.target as HTMLElement | null
+  const btn = target?.closest?.('.md-code-copy') as HTMLElement | null
+  if (!btn) return
+
+  const code = btn.closest('.md-code-wrap')?.querySelector('code')
+  if (!code) return
+
+  if (!(await writeClipboard(code.textContent ?? ''))) return
+
+  const original = btn.textContent
+  btn.textContent = t('toast.copied')
+  window.setTimeout(() => {
+    btn.textContent = original
   }, 1200)
 }
 
@@ -99,7 +135,7 @@ onBeforeUnmount(() => {
           <span class="md-title">{{ t('markdown.title') }}</span>
           <button class="md-close" :title="t('markdown.close')" @click="close">×</button>
         </header>
-        <div class="md-body" v-html="renderedHtml" />
+        <div class="md-body" v-html="renderedHtml" @click="onBodyClick" />
         <footer class="md-footer">
           <span class="md-meta">{{ charCount }} chars</span>
           <button class="md-btn" @click="copyRaw">
@@ -312,12 +348,64 @@ onBeforeUnmount(() => {
   border-radius: 6px;
 }
 
-.md-body :deep(pre.md-code-block) {
+/* Code blocks are wrapped in a frame with a header row (language + copy). */
+.md-body :deep(.md-code-wrap) {
+  margin: 0 0 12px;
   border: 1px solid #e8eaed;
+  border-radius: 6px;
+  overflow: hidden;
 }
 
-.md-dark :deep(pre.md-code-block) {
+.md-dark :deep(.md-code-wrap) {
   border-color: #3c3c3c;
+}
+
+.md-body :deep(.md-code-head) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 8px 3px 10px;
+  font-size: 11px;
+  background: rgba(0, 0, 0, 0.04);
+  border-bottom: 1px solid #e8eaed;
+}
+
+.md-dark :deep(.md-code-head) {
+  background: rgba(255, 255, 255, 0.06);
+  border-bottom-color: #3c3c3c;
+}
+
+.md-body :deep(.md-code-lang) {
+  font-family: consolas, menlo, monaco, monospace;
+  opacity: 0.7;
+}
+
+.md-body :deep(.md-code-copy) {
+  border: 1px solid transparent;
+  background: transparent;
+  color: inherit;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.md-body :deep(.md-code-copy:hover) {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.06);
+  border-color: #d1d5db;
+}
+
+.md-dark :deep(.md-code-copy:hover) {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: #4f4f4f;
+}
+
+/* The wrapper owns the frame, so the <pre> inside drops its own. */
+.md-body :deep(.md-code-wrap pre) {
+  margin: 0;
+  border-radius: 0;
 }
 
 /* highlight.js themes ship their own background/padding on `.hljs`. The dialog
